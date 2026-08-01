@@ -12,6 +12,8 @@ pub const Notice = enum {
     empty_entry,
     task_created,
     task_renamed,
+    task_completed,
+    task_reopened,
     task_deleted,
     entry_created,
     entry_updated,
@@ -23,6 +25,7 @@ pub const PendingAction = union(enum) {
     none,
     create_task,
     rename_task: i64,
+    toggle_task_completed: i64,
     delete_task: i64,
     create_entry: i64,
     update_entry: i64,
@@ -44,12 +47,19 @@ pub const EntryClick = struct {
     y: f32,
 };
 
+pub const TaskFilter = enum {
+    active,
+    completed,
+    all,
+};
+
 pub const AppState = struct {
     store: ?database.Database = null,
     tasks: std.ArrayList(database.Task) = .empty,
 
     sidebar_ratio: f32 = 0.28,
     selected_task_id: ?i64 = null,
+    task_filter: TaskFilter = .active,
 
     draft: [entry_capacity]u8 = @splat(0),
     rename_buffer: [title_capacity]u8 = @splat(0),
@@ -98,6 +108,9 @@ pub const AppState = struct {
             .rename_task => |task_id| {
                 self.processRenameTask(allocator, task_id) catch |err| self.databaseFailure(err);
             },
+            .toggle_task_completed => |task_id| {
+                self.processToggleTaskCompleted(allocator, task_id) catch |err| self.databaseFailure(err);
+            },
             .delete_task => |task_id| {
                 self.processDeleteTask(allocator, task_id) catch |err| self.databaseFailure(err);
             },
@@ -124,12 +137,39 @@ pub const AppState = struct {
     }
 
     pub fn selectTask(self: *AppState, task_id: i64) void {
-        self.cancelMode();
+        self.resetTaskInteraction();
         self.selected_task_id = task_id;
-        clearBuffer(self.draft[0..]);
-        self.scroll_to_latest = false;
-        self.focus_composer = false;
-        self.composer_ime_active = false;
+    }
+
+    pub fn setTaskFilter(self: *AppState, filter: TaskFilter) void {
+        if (self.task_filter == filter) return;
+
+        self.cancelMode();
+        self.task_filter = filter;
+
+        if (self.selected_task_id) |selected_id| {
+            for (self.tasks.items) |task| {
+                if (task.id == selected_id and self.taskVisible(&task)) return;
+            }
+        }
+
+        self.resetTaskInteraction();
+        self.selected_task_id = self.firstVisibleTaskId();
+    }
+
+    pub fn taskVisible(self: *const AppState, task: *const database.Task) bool {
+        return switch (self.task_filter) {
+            .active => !task.completed,
+            .completed => task.completed,
+            .all => true,
+        };
+    }
+
+    pub fn hasVisibleTasks(self: *const AppState) bool {
+        for (self.tasks.items) |*task| {
+            if (self.taskVisible(task)) return true;
+        }
+        return false;
     }
 
     pub fn beginRename(self: *AppState, task: *const database.Task) void {
@@ -214,6 +254,7 @@ pub const AppState = struct {
         allocator: std.mem.Allocator,
     ) !void {
         const task_id = try self.storePtr().createTask("新事项");
+        self.task_filter = .active;
         try self.reloadData(allocator, task_id);
 
         if (self.selectedTask()) |task| self.beginRename(task);
@@ -237,6 +278,33 @@ pub const AppState = struct {
         self.mode = .none;
         clearBuffer(self.rename_buffer[0..]);
         self.notice = .task_renamed;
+    }
+
+    fn processToggleTaskCompleted(
+        self: *AppState,
+        allocator: std.mem.Allocator,
+        task_id: i64,
+    ) !void {
+        const completed = blk: {
+            for (self.tasks.items) |task| {
+                if (task.id == task_id) break :blk !task.completed;
+            }
+            return;
+        };
+        const previous_selected_id = self.selected_task_id;
+
+        try self.storePtr().setTaskCompleted(task_id, completed);
+        try self.reloadData(allocator, task_id);
+
+        if (self.selected_task_id != previous_selected_id) {
+            self.resetTaskInteraction();
+        }
+        self.notice = if (self.selected_task_id == null)
+            .none
+        else if (completed)
+            .task_completed
+        else
+            .task_reopened;
     }
 
     fn processDeleteTask(
@@ -334,14 +402,14 @@ pub const AppState = struct {
 
         if (wanted_id) |id| {
             for (self.tasks.items) |task| {
-                if (task.id == id) {
+                if (task.id == id and self.taskVisible(&task)) {
                     self.selected_task_id = id;
                     return;
                 }
             }
         }
 
-        self.selected_task_id = self.tasks.items[0].id;
+        self.selected_task_id = self.firstVisibleTaskId();
     }
 
     fn storePtr(self: *AppState) *database.Database {
@@ -357,6 +425,21 @@ pub const AppState = struct {
             return null;
         }
         return self.selected_task_id;
+    }
+
+    fn firstVisibleTaskId(self: *const AppState) ?i64 {
+        for (self.tasks.items) |*task| {
+            if (self.taskVisible(task)) return task.id;
+        }
+        return null;
+    }
+
+    fn resetTaskInteraction(self: *AppState) void {
+        self.cancelMode();
+        clearBuffer(self.draft[0..]);
+        self.scroll_to_latest = false;
+        self.focus_composer = false;
+        self.composer_ime_active = false;
     }
 
     fn databaseFailure(self: *AppState, err: anyerror) void {

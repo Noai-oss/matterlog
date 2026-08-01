@@ -28,6 +28,7 @@ pub const Entry = struct {
 pub const Task = struct {
     id: i64,
     title: []u8,
+    completed: bool,
     entries: std.ArrayList(Entry) = .empty,
 
     pub fn deinit(self: *Task, allocator: std.mem.Allocator) void {
@@ -93,7 +94,8 @@ pub const Database = struct {
         try self.exec(
             \\CREATE TABLE IF NOT EXISTS tasks (
             \\    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            \\    title       TEXT NOT NULL
+            \\    title       TEXT NOT NULL,
+            \\    completed   INTEGER NOT NULL DEFAULT 0
             \\);
             \\CREATE TABLE IF NOT EXISTS entries (
             \\    id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -121,7 +123,8 @@ pub const Database = struct {
         const statement = try self.prepare(
             \\SELECT
             \\    id,
-            \\    title
+            \\    title,
+            \\    completed
             \\FROM tasks
             \\ORDER BY id;
         );
@@ -181,6 +184,21 @@ pub const Database = struct {
         defer _ = c.sqlite3_finalize(statement);
 
         try bindInt64(statement, 1, task_id);
+        try expectDone(c.sqlite3_step(statement));
+    }
+
+    pub fn setTaskCompleted(
+        self: *Database,
+        task_id: i64,
+        completed: bool,
+    ) !void {
+        const statement = try self.prepare(
+            "UPDATE tasks SET completed = ? WHERE id = ?;",
+        );
+        defer _ = c.sqlite3_finalize(statement);
+
+        try bindInt64(statement, 1, @intFromBool(completed));
+        try bindInt64(statement, 2, task_id);
         try expectDone(c.sqlite3_step(statement));
     }
 
@@ -351,6 +369,7 @@ fn readTask(
     return .{
         .id = @intCast(c.sqlite3_column_int64(statement, 0)),
         .title = title,
+        .completed = c.sqlite3_column_int(statement, 2) != 0,
     };
 }
 
@@ -412,6 +431,7 @@ test "database CRUD and cascade deletion" {
     const task_id = try database.createTask("初始事项");
     try database.createEntry(task_id, "第一条进展");
     try database.renameTask(task_id, "重命名事项");
+    try database.setTaskCompleted(task_id, true);
 
     var entry_id: i64 = undefined;
     {
@@ -420,17 +440,20 @@ test "database CRUD and cascade deletion" {
 
         try std.testing.expectEqual(@as(usize, 1), tasks.items.len);
         try std.testing.expectEqualStrings("重命名事项", tasks.items[0].title);
+        try std.testing.expect(tasks.items[0].completed);
         try std.testing.expectEqual(@as(usize, 1), tasks.items[0].entries.items.len);
         try std.testing.expectEqualStrings("第一条进展", tasks.items[0].entries.items[0].body);
         try std.testing.expect(!tasks.items[0].entries.items[0].edited);
         entry_id = tasks.items[0].entries.items[0].id;
     }
 
+    try database.setTaskCompleted(task_id, false);
     try database.updateEntry(entry_id, "修改后的进展");
     {
         var tasks = try database.loadTasks(allocator);
         defer deinitTasks(allocator, &tasks);
 
+        try std.testing.expect(!tasks.items[0].completed);
         try std.testing.expectEqualStrings("修改后的进展", tasks.items[0].entries.items[0].body);
         try std.testing.expect(tasks.items[0].entries.items[0].edited);
     }

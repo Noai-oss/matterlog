@@ -63,6 +63,13 @@ pub fn appInit(win: *dvui.Window) !void {
     theme.font_body = body_font;
     theme.font_heading = body_font.withSize(13.0);
     theme.font_title = body_font.withSize(16.0);
+    theme.app1 = .{
+        .fill = .fromHex("#e4f3e8"),
+        .fill_hover = .fromHex("#d6eadc"),
+        .fill_press = .fromHex("#c5dfcd"),
+        .text = .fromHex("#28613a"),
+        .border = .fromHex("#8fbd9b"),
+    };
     win.themeSet(theme);
 
     const database_path = try databasePath(win.gpa);

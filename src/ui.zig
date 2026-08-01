@@ -4,7 +4,8 @@ const database = @import("database.zig");
 const state = @import("app_state.zig");
 
 const AppState = state.AppState;
-const header_primary_button_width: f32 = 76;
+const TaskFilter = state.TaskFilter;
+const header_action_button_width: f32 = 64;
 const header_secondary_button_width: f32 = 32;
 
 const HeaderControlPosition = enum { middle, trailing };
@@ -74,6 +75,7 @@ fn drawSidebar(app: *AppState) void {
     defer sidebar.deinit();
 
     drawSidebarHeader(app);
+    drawTaskFilters(app);
 
     var scroll = dvui.scrollArea(
         @src(),
@@ -87,7 +89,19 @@ fn drawSidebar(app: *AppState) void {
         return;
     }
 
-    for (app.tasks.items) |*task| drawTaskButton(app, task);
+    if (!app.hasVisibleTasks()) {
+        const message = switch (app.task_filter) {
+            .active => "没有进行中的事项。",
+            .completed => "还没有已完成的事项。",
+            .all => unreachable,
+        };
+        dvui.labelNoFmt(@src(), message, .{}, .{});
+        return;
+    }
+
+    for (app.tasks.items) |*task| {
+        if (app.taskVisible(task)) drawTaskButton(app, task);
+    }
 }
 
 fn drawSidebarHeader(app: *AppState) void {
@@ -114,32 +128,92 @@ fn drawSidebarHeader(app: *AppState) void {
         },
     );
 
-    if (dvui.button(@src(), "新建", .{}, .{ .style = .highlight })) {
+    if (dvui.button(@src(), "新建", .{}, .{ .style = .control })) {
         app.pending = .create_task;
+    }
+}
+
+fn drawTaskFilters(app: *AppState) void {
+    var row = dvui.box(
+        @src(),
+        .{ .dir = .horizontal },
+        .{
+            .expand = .horizontal,
+            .margin = .{ .y = 4, .h = 6 },
+        },
+    );
+    defer row.deinit();
+
+    drawTaskFilterButton(app, "进行中", .active);
+    drawTaskFilterButton(app, "已完成", .completed);
+    drawTaskFilterButton(app, "全部", .all);
+}
+
+fn drawTaskFilterButton(
+    app: *AppState,
+    label: []const u8,
+    filter: TaskFilter,
+) void {
+    const selected = app.task_filter == filter;
+
+    if (dvui.button(
+        @src(),
+        label,
+        .{ .draw_focus = false },
+        .{
+            .tab_index = 0,
+            .expand = .horizontal,
+            .style = .window,
+            .border = .all(1),
+            .color_fill = if (selected) dvui.themeGet().focus.opacity(0.12) else null,
+            .color_text = if (selected) dvui.themeGet().focus else null,
+            .color_border = if (selected)
+                dvui.themeGet().focus.opacity(0.55)
+            else
+                dvui.themeGet().border.opacity(0.24),
+            .padding = .{ .x = 5, .y = 4, .w = 5, .h = 4 },
+            .margin = .{ .x = 2, .w = 2 },
+            .id_extra = @intFromEnum(filter) + 1,
+        },
+    )) {
+        app.setTaskFilter(filter);
+        dvui.focusWidget(null, null, null);
+        dvui.refresh(null, @src(), null);
     }
 }
 
 fn drawTaskButton(app: *AppState, task: *const database.Task) void {
     const selected = app.selected_task_id != null and
         app.selected_task_id.? == task.id;
+    const theme = dvui.themeGet();
+    const text_color: ?dvui.Color = if (task.completed)
+        theme.color(.app1, .text)
+    else
+        null;
 
     if (dvui.button(
         @src(),
         task.title,
-        .{},
+        .{ .draw_focus = false },
         .{
+            .tab_index = 0,
             .expand = .horizontal,
-            .style = if (selected) .highlight else .control,
-            .color_border = if (selected)
-                dvui.themeGet().focus.opacity(0.5)
-            else
-                dvui.themeGet().border.opacity(0.28),
+            .style = .content,
+            .border = .{ .x = 3 },
+            .color_fill = theme.fill,
+            .color_fill_hover = theme.color(.window, .fill),
+            .color_fill_press = theme.color(.control, .fill),
+            .color_text = text_color,
+            .color_text_hover = text_color,
+            .color_text_press = text_color,
+            .color_border = if (selected) theme.focus else theme.focus.opacity(0),
             .margin = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
             .padding = .all(6),
             .id_extra = idExtra(task.id),
         },
     )) {
         app.selectTask(task.id);
+        dvui.focusWidget(null, null, null);
         dvui.refresh(null, @src(), null);
     }
 }
@@ -158,13 +232,20 @@ fn drawDetailPanel(app: *AppState) void {
     defer detail.deinit();
 
     const task = app.selectedTask() orelse {
-        dvui.label(
-            @src(),
-            "没有可显示的事项",
-            .{},
-            .{ .font = .theme(.title) },
-        );
-        dvui.label(@src(), "点击左侧“新建”创建一个事项。", .{}, .{});
+        switch (app.task_filter) {
+            .active => {
+                dvui.label(@src(), "没有进行中的事项", .{}, .{ .font = .theme(.title) });
+                dvui.label(@src(), "可以新建事项，或查看已完成事项。", .{}, .{});
+            },
+            .completed => {
+                dvui.label(@src(), "还没有已完成的事项", .{}, .{ .font = .theme(.title) });
+                dvui.label(@src(), "完成的事项会保留在这里。", .{}, .{});
+            },
+            .all => {
+                dvui.label(@src(), "没有可显示的事项", .{}, .{ .font = .theme(.title) });
+                dvui.label(@src(), "点击左侧“新建”创建一个事项。", .{}, .{});
+            },
+        }
         drawNotice(app);
         return;
     };
@@ -208,6 +289,7 @@ fn drawTaskHeader(app: *AppState, task: *const database.Task) void {
                 .{
                     .font = .theme(.title),
                     .expand = .horizontal,
+                    .max_size_content = .width(0),
                     .gravity_y = 0.5,
                     .padding = .{ .x = 6, .w = 6 },
                 },
@@ -220,7 +302,7 @@ fn drawTaskHeader(app: *AppState, task: *const database.Task) void {
                     @src(),
                     "确认删除",
                     .{},
-                    headerButtonOptions(header_primary_button_width, .middle, .err),
+                    headerButtonOptions(header_action_button_width, .middle, .err),
                 )) {
                     app.pending = .{ .delete_task = task.id };
                 }
@@ -235,11 +317,28 @@ fn drawTaskHeader(app: *AppState, task: *const database.Task) void {
                     dvui.refresh(null, @src(), null);
                 }
             } else {
+                var status_button_options = headerButtonOptions(
+                    header_action_button_width,
+                    .middle,
+                    .app1,
+                );
+                status_button_options.tab_index = 0;
+
+                if (dvui.button(
+                    @src(),
+                    if (task.completed) "重新打开" else "标记完成",
+                    .{ .draw_focus = false },
+                    status_button_options,
+                )) {
+                    app.pending = .{ .toggle_task_completed = task.id };
+                    dvui.focusWidget(null, null, null);
+                }
+
                 if (dvui.button(
                     @src(),
                     "重命名",
                     .{},
-                    headerButtonOptions(header_primary_button_width, .middle, null),
+                    headerButtonOptions(header_action_button_width, .middle, null),
                 )) {
                     app.beginRename(task);
                     dvui.refresh(null, @src(), null);
@@ -296,7 +395,7 @@ fn drawRenameEditor(app: *AppState, task_id: i64) void {
         @src(),
         "保存",
         .{},
-        headerButtonOptions(header_primary_button_width, .middle, .highlight),
+        headerButtonOptions(header_action_button_width, .middle, .highlight),
     );
     if (enter_pressed or save_clicked) {
         app.pending = .{ .rename_task = task_id };
@@ -625,6 +724,8 @@ fn drawNotice(app: *const AppState) void {
         .empty_entry => "进展内容不能为空。",
         .task_created => "事项已创建，可以直接修改名称。",
         .task_renamed => "事项名称已更新。",
+        .task_completed => "事项已完成。",
+        .task_reopened => "事项已重新打开。",
         .task_deleted => "事项已删除。",
         .entry_created => "进展已发送。",
         .entry_updated => "进展已修改。",
@@ -675,6 +776,7 @@ fn headerButtonOptions(
     return .{
         .style = style,
         .min_size_content = .width(width),
+        .max_size_content = .width(width),
         .gravity_y = 0.5,
         .margin = switch (position) {
             .middle => .{ .x = 4, .w = 4 },
