@@ -1,0 +1,685 @@
+const std = @import("std");
+const dvui = @import("dvui");
+const database = @import("database.zig");
+const state = @import("app_state.zig");
+
+const AppState = state.AppState;
+const header_primary_button_width: f32 = 76;
+const header_secondary_button_width: f32 = 32;
+
+const HeaderControlPosition = enum { middle, trailing };
+
+pub fn draw(app: *AppState) void {
+    var root = dvui.box(
+        @src(),
+        .{ .dir = .vertical },
+        .{
+            .expand = .both,
+            .style = .window,
+            .background = true,
+        },
+    );
+    defer root.deinit();
+
+    processEscapeShortcut(app, root.data());
+    drawMainPanes(app);
+}
+
+fn processEscapeShortcut(app: *AppState, root_data: *dvui.WidgetData) void {
+    if (!app.hasActiveMode()) return;
+
+    for (dvui.events()) |*event| {
+        if (event.handled or event.evt != .key) continue;
+
+        const key = event.evt.key;
+        if (key.action != .down or key.code != .escape) continue;
+
+        event.handle(@src(), root_data);
+        app.cancelMode();
+        dvui.refresh(null, @src(), root_data.id);
+        return;
+    }
+}
+
+fn drawMainPanes(app: *AppState) void {
+    var panes = dvui.paned(
+        @src(),
+        .{
+            .direction = .horizontal,
+            .collapsed_size = 0,
+            .split_ratio = &app.sidebar_ratio,
+            // Keep the handle width stable while hovering to prevent jitter.
+            .handle_size = 6,
+            .handle_margin = 2,
+        },
+        .{ .expand = .both, .background = false },
+    );
+    defer panes.deinit();
+
+    if (panes.showFirst()) drawSidebar(app);
+    if (panes.showSecond()) drawDetailPanel(app);
+}
+
+fn drawSidebar(app: *AppState) void {
+    var sidebar = dvui.box(
+        @src(),
+        .{ .dir = .vertical },
+        .{
+            .expand = .both,
+            .background = true,
+            .style = .content,
+            .padding = .all(10),
+        },
+    );
+    defer sidebar.deinit();
+
+    drawSidebarHeader(app);
+
+    var scroll = dvui.scrollArea(
+        @src(),
+        .{},
+        .{ .expand = .both, .background = false },
+    );
+    defer scroll.deinit();
+
+    if (app.tasks.items.len == 0) {
+        dvui.label(@src(), "还没有事项。", .{}, .{});
+        return;
+    }
+
+    for (app.tasks.items) |*task| drawTaskButton(app, task);
+}
+
+fn drawSidebarHeader(app: *AppState) void {
+    var header = dvui.box(
+        @src(),
+        .{ .dir = .horizontal },
+        .{
+            .expand = .horizontal,
+            .margin = .{ .h = 2 },
+        },
+    );
+    defer header.deinit();
+
+    dvui.label(
+        @src(),
+        "事项",
+        .{},
+        .{
+            .font = .theme(.heading),
+            .expand = .horizontal,
+            .gravity_y = 0.5,
+            // Match the task text inset: 4 px margin + 6 px padding.
+            .padding = .{ .x = 10 },
+        },
+    );
+
+    if (dvui.button(@src(), "新建", .{}, .{ .style = .highlight })) {
+        app.pending = .create_task;
+    }
+}
+
+fn drawTaskButton(app: *AppState, task: *const database.Task) void {
+    const selected = app.selected_task_id != null and
+        app.selected_task_id.? == task.id;
+
+    if (dvui.button(
+        @src(),
+        task.title,
+        .{},
+        .{
+            .expand = .horizontal,
+            .style = if (selected) .highlight else .control,
+            .color_border = if (selected)
+                dvui.themeGet().focus.opacity(0.5)
+            else
+                dvui.themeGet().border.opacity(0.28),
+            .margin = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
+            .padding = .all(6),
+            .id_extra = idExtra(task.id),
+        },
+    )) {
+        app.selectTask(task.id);
+        dvui.refresh(null, @src(), null);
+    }
+}
+
+fn drawDetailPanel(app: *AppState) void {
+    var detail = dvui.box(
+        @src(),
+        .{ .dir = .vertical },
+        .{
+            .expand = .both,
+            .background = true,
+            .style = .window,
+            .padding = .{ .x = 12, .y = 12, .w = 12, .h = 6 },
+        },
+    );
+    defer detail.deinit();
+
+    const task = app.selectedTask() orelse {
+        dvui.label(
+            @src(),
+            "没有可显示的事项",
+            .{},
+            .{ .font = .theme(.title) },
+        );
+        dvui.label(@src(), "点击左侧“新建”创建一个事项。", .{}, .{});
+        drawNotice(app);
+        return;
+    };
+
+    drawTaskHeader(app, task);
+    drawTimeline(app, task);
+    drawComposer(app, task.id);
+    drawNotice(app);
+}
+
+fn drawTaskHeader(app: *AppState, task: *const database.Task) void {
+    {
+        // Display and rename controls differ slightly in natural height. Keep
+        // this slot fixed so toggling them does not move the content below.
+        var title_slot = dvui.box(
+            @src(),
+            .{ .dir = .vertical },
+            .{
+                .expand = .horizontal,
+                .margin = .{ .y = 3, .h = 3 },
+                .min_size_content = .height(30),
+                .max_size_content = .height(30),
+            },
+        );
+        defer title_slot.deinit();
+
+        if (app.isRenamingTask(task.id)) {
+            drawRenameEditor(app, task.id);
+        } else {
+            var title_row = dvui.box(
+                @src(),
+                .{ .dir = .horizontal },
+                .{ .expand = .horizontal },
+            );
+            defer title_row.deinit();
+
+            dvui.labelNoFmt(
+                @src(),
+                task.title,
+                .{},
+                .{
+                    .font = .theme(.title),
+                    .expand = .horizontal,
+                    .gravity_y = 0.5,
+                    .padding = .{ .x = 6, .w = 6 },
+                },
+            );
+
+            const confirming_delete = app.isConfirmingTaskDeletion(task.id);
+
+            if (confirming_delete) {
+                if (dvui.button(
+                    @src(),
+                    "确认删除",
+                    .{},
+                    headerButtonOptions(header_primary_button_width, .middle, .err),
+                )) {
+                    app.pending = .{ .delete_task = task.id };
+                }
+
+                if (dvui.button(
+                    @src(),
+                    "取消",
+                    .{},
+                    headerButtonOptions(header_secondary_button_width, .trailing, null),
+                )) {
+                    app.cancelMode();
+                    dvui.refresh(null, @src(), null);
+                }
+            } else {
+                if (dvui.button(
+                    @src(),
+                    "重命名",
+                    .{},
+                    headerButtonOptions(header_primary_button_width, .middle, null),
+                )) {
+                    app.beginRename(task);
+                    dvui.refresh(null, @src(), null);
+                }
+
+                if (dvui.button(
+                    @src(),
+                    "删除",
+                    .{},
+                    headerButtonOptions(header_secondary_button_width, .trailing, null),
+                )) {
+                    app.requestTaskDeletion(task.id);
+                    dvui.refresh(null, @src(), null);
+                }
+            }
+        }
+    }
+}
+
+fn drawRenameEditor(app: *AppState, task_id: i64) void {
+    var row = dvui.box(
+        @src(),
+        .{ .dir = .horizontal },
+        .{ .expand = .horizontal },
+    );
+    defer row.deinit();
+
+    var editor: dvui.TextEntryWidget = undefined;
+    editor.init(
+        @src(),
+        .{
+            .text = .{ .buffer = &app.rename_buffer },
+            .placeholder = "事项名称",
+        },
+        .{
+            .expand = .horizontal,
+            .gravity_y = 0.5,
+            .margin = .{ .w = 4 },
+            .padding = .{ .x = 6, .y = 5, .w = 6, .h = 5 },
+        },
+    );
+
+    if (dvui.firstFrame(editor.data().id)) {
+        dvui.focusWidget(editor.data().id, null, null);
+        editor.textLayout.selection.selectAll();
+    }
+
+    editor.processEvents();
+    editor.draw();
+    const enter_pressed = editor.enter_pressed;
+    editor.deinit();
+
+    const save_clicked = dvui.button(
+        @src(),
+        "保存",
+        .{},
+        headerButtonOptions(header_primary_button_width, .middle, .highlight),
+    );
+    if (enter_pressed or save_clicked) {
+        app.pending = .{ .rename_task = task_id };
+    }
+
+    if (dvui.button(
+        @src(),
+        "取消",
+        .{},
+        headerButtonOptions(header_secondary_button_width, .trailing, null),
+    )) {
+        app.cancelMode();
+        dvui.refresh(null, @src(), null);
+    }
+}
+
+fn drawTimeline(app: *AppState, task: *const database.Task) void {
+    var timeline = dvui.scrollArea(
+        @src(),
+        .{},
+        .{
+            .expand = .both,
+            // Entries scroll within the timeline and never push out the editor.
+            .max_size_content = .height(0),
+            .background = true,
+            .style = .content,
+            .border = .all(1),
+            .padding = .all(10),
+        },
+    );
+    defer timeline.deinit();
+
+    if (task.entries.items.len == 0) {
+        dvui.label(@src(), "当前事项还没有进展。", .{}, .{});
+        dvui.label(@src(), "在下面输入内容，然后点击“发送”。", .{}, .{});
+        return;
+    }
+
+    for (task.entries.items, 0..) |*entry, index| {
+        const scroll_here = app.scroll_to_latest and index + 1 == task.entries.items.len;
+        drawEntryCard(app, entry, scroll_here);
+    }
+}
+
+fn drawEntryCard(
+    app: *AppState,
+    entry: *const database.Entry,
+    scroll_here: bool,
+) void {
+    var card = dvui.box(
+        @src(),
+        .{ .dir = .vertical },
+        .{
+            .expand = .horizontal,
+            .background = true,
+            .style = .control,
+            .border = .all(1),
+            .padding = .all(8),
+            .margin = .all(3),
+            .id_extra = idExtra(entry.id),
+        },
+    );
+    defer card.deinit();
+
+    if (app.isEditingEntry(entry.id)) {
+        drawEntryEditor(app, entry.id);
+        return;
+    }
+
+    var body = dvui.textLayout(
+        @src(),
+        .{ .break_lines = true, .cache_layout = true },
+        .{ .expand = .horizontal, .background = false },
+    );
+    body.addText(entry.body, .{});
+    const edit_double_clicked = entryBodyDoubleClicked(app, body, entry.id);
+    body.deinit();
+
+    if (edit_double_clicked) {
+        app.beginEntryEdit(entry);
+        dvui.refresh(null, @src(), null);
+        return;
+    }
+
+    var actions = dvui.box(
+        @src(),
+        .{ .dir = .horizontal },
+        .{ .expand = .horizontal },
+    );
+    defer actions.deinit();
+
+    const metadata_options: dvui.Options = .{
+        .font = dvui.Font.theme(.body).withSize(9),
+        .color_text = dvui.themeGet().text.opacity(0.42),
+        .expand = .horizontal,
+        .gravity_y = 0.5,
+    };
+
+    if (!entry.edited) {
+        dvui.label(@src(), "创建 {s}", .{entry.created_text}, metadata_options);
+    } else {
+        dvui.label(
+            @src(),
+            "创建 {s} · 修改 {s}",
+            .{ entry.created_text, entry.updated_text },
+            metadata_options,
+        );
+    }
+
+    const confirming_delete = app.isConfirmingEntryDeletion(entry.id);
+
+    if (confirming_delete) {
+        if (dvui.button(@src(), "确认", .{}, .{ .style = .err })) {
+            app.pending = .{ .delete_entry = entry.id };
+        }
+        if (dvui.button(@src(), "取消", .{}, .{ .margin = .{ .x = 4, .y = 4, .h = 4 } })) {
+            app.cancelMode();
+            dvui.refresh(null, @src(), null);
+        }
+    } else {
+        if (dvui.button(@src(), "编辑", .{}, .{})) {
+            app.beginEntryEdit(entry);
+            dvui.refresh(null, @src(), null);
+        }
+        if (dvui.button(@src(), "删除", .{}, .{ .margin = .{ .x = 4, .y = 4, .h = 4 } })) {
+            app.requestEntryDeletion(entry.id);
+            dvui.refresh(null, @src(), null);
+        }
+    }
+
+    if (scroll_here and !dvui.firstFrame(card.data().id)) {
+        dvui.scrollTo(.{
+            .screen_rect = actions.data().borderRectScale().r,
+            .over_scroll = true,
+        });
+        app.scroll_to_latest = false;
+    }
+}
+
+fn drawEntryEditor(app: *AppState, entry_id: i64) void {
+    var editor: dvui.TextEntryWidget = undefined;
+    editor.init(
+        @src(),
+        .{
+            .text = .{ .buffer = &app.edit_buffer },
+            .multiline = true,
+            .break_lines = true,
+            .scroll_horizontal = false,
+            .placeholder = "修改进展内容……",
+        },
+        .{
+            .expand = .horizontal,
+            .min_size_content = .{ .h = 92 },
+            .max_size_content = dvui.Options.MaxSize.height(92),
+            .margin = .{ .y = 4, .h = 4 },
+        },
+    );
+
+    if (dvui.firstFrame(editor.data().id)) {
+        dvui.focusWidget(editor.data().id, null, null);
+        editor.textLayout.selection.moveCursor(std.math.maxInt(usize), false);
+    }
+
+    const shortcut_pressed = processSubmitShortcut(
+        &app.edit_ime_active,
+        &editor,
+    );
+    editor.processEvents();
+    editor.draw();
+    editor.deinit();
+
+    var buttons = dvui.box(
+        @src(),
+        .{ .dir = .horizontal },
+        .{ .expand = .horizontal, .gravity_x = 1.0 },
+    );
+    defer buttons.deinit();
+
+    const save_clicked = dvui.button(
+        @src(),
+        "保存修改",
+        .{},
+        .{ .style = .highlight },
+    );
+    if (shortcut_pressed or save_clicked) {
+        app.pending = .{ .update_entry = entry_id };
+    }
+    if (dvui.button(@src(), "取消", .{}, .{ .margin = .{ .x = 4, .y = 4, .h = 4 } })) {
+        app.cancelMode();
+        dvui.refresh(null, @src(), null);
+    }
+}
+
+fn drawComposer(app: *AppState, task_id: i64) void {
+    var composer = dvui.box(
+        @src(),
+        .{ .dir = .horizontal },
+        .{ .expand = .horizontal, .margin = .{ .y = 4, .h = 4 } },
+    );
+    defer composer.deinit();
+
+    var editor: dvui.TextEntryWidget = undefined;
+    editor.init(
+        @src(),
+        .{
+            .text = .{ .buffer = &app.draft },
+            .multiline = true,
+            .break_lines = true,
+            .scroll_horizontal = false,
+            .placeholder = "输入当前事项的最新进展……",
+        },
+        .{
+            .expand = .horizontal,
+            .min_size_content = .{ .h = 78 },
+            .max_size_content = dvui.Options.MaxSize.height(78),
+            .margin = .{ .w = 4 },
+        },
+    );
+
+    if (app.focus_composer) {
+        dvui.focusWidget(editor.data().id, null, null);
+        app.focus_composer = false;
+    }
+
+    const shortcut_pressed = processSubmitShortcut(
+        &app.composer_ime_active,
+        &editor,
+    );
+    editor.processEvents();
+    editor.draw();
+    editor.deinit();
+
+    const send_clicked = dvui.button(
+        @src(),
+        "发送",
+        .{},
+        .{
+            .style = .highlight,
+            .gravity_y = 1.0,
+            .min_size_content = .{ .w = 70, .h = 34 },
+            .margin = .{ .x = 4 },
+        },
+    );
+    if (shortcut_pressed or send_clicked) {
+        app.pending = .{ .create_entry = task_id };
+    }
+}
+
+fn processSubmitShortcut(
+    ime_active: *bool,
+    editor: *dvui.TextEntryWidget,
+) bool {
+    var submit = false;
+
+    for (dvui.events()) |*event| {
+        if (!editor.matchEvent(event)) continue;
+
+        switch (event.evt) {
+            .text => |text_event| switch (text_event.action) {
+                .value => |value| {
+                    const text = std.mem.sliceTo(value.txt, 0);
+                    ime_active.* = value.selected and text.len != 0;
+                },
+                .selection => {},
+            },
+            .key => |key| {
+                if (key.code != .enter or
+                    (key.action != .down and key.action != .repeat) or
+                    !key.mod.matchBind("ctrl/cmd"))
+                {
+                    continue;
+                }
+
+                // Consume repeats too: holding the shortcut must create at
+                // most one entry and must never insert a newline.
+                event.handle(@src(), editor.data());
+                if (key.action == .down and !ime_active.*) {
+                    submit = true;
+                }
+            },
+            else => {},
+        }
+    }
+
+    return submit;
+}
+
+fn entryBodyDoubleClicked(
+    app: *AppState,
+    body: *dvui.TextLayoutWidget,
+    entry_id: i64,
+) bool {
+    const click_event = body.click_event orelse return false;
+    if (click_event != .mouse or click_event.mouse.button != .left) return false;
+
+    const point = click_event.mouse.p;
+    const now = dvui.frameTimeNS();
+    const is_double_click = if (app.last_entry_click) |last| blk: {
+        const distance = point.diff(.{ .x = last.x, .y = last.y }).toNatural();
+        break :blk last.entry_id == entry_id and
+            now >= last.time_ns and
+            now - last.time_ns <= 500_000_000 and
+            @abs(distance.x) <= dvui.Dragging.threshold and
+            @abs(distance.y) <= dvui.Dragging.threshold;
+    } else false;
+
+    if (is_double_click) {
+        app.last_entry_click = null;
+    } else {
+        app.last_entry_click = .{
+            .entry_id = entry_id,
+            .time_ns = now,
+            .x = point.x,
+            .y = point.y,
+        };
+    }
+    return is_double_click;
+}
+
+fn drawNotice(app: *const AppState) void {
+    const message: []const u8 = switch (app.notice) {
+        .none => "",
+        .confirm_delete_task => "删除事项会同时删除其中的所有进展。",
+        .confirm_delete_entry => "确定删除这条进展？",
+        .empty_title => "事项名称不能为空。",
+        .empty_entry => "进展内容不能为空。",
+        .task_created => "事项已创建，可以直接修改名称。",
+        .task_renamed => "事项名称已更新。",
+        .task_deleted => "事项已删除。",
+        .entry_created => "进展已发送。",
+        .entry_updated => "进展已修改。",
+        .entry_deleted => "进展已删除。",
+        .database_error => "数据库操作失败，请查看终端日志。",
+    };
+
+    const notice_font = dvui.Font.theme(.body).withSize(9).withLineHeight(1.0);
+    const color = switch (app.notice) {
+        .none => dvui.themeGet().text.opacity(0),
+        .confirm_delete_task,
+        .confirm_delete_entry,
+        .empty_title,
+        .empty_entry,
+        .database_error,
+        => dvui.themeGet().color(.err, .fill),
+        else => dvui.themeGet().focus,
+    };
+
+    // Reserve one line even when empty so notices never shift the editor.
+    const notice_height = notice_font.textHeight();
+    dvui.labelNoFmt(
+        @src(),
+        message,
+        .{},
+        .{
+            .font = notice_font,
+            .color_text = color,
+            .expand = .horizontal,
+            .padding = .{},
+            .margin = .{ .x = 4, .w = 4 },
+            .min_size_content = .height(notice_height),
+            .max_size_content = .height(notice_height),
+        },
+    );
+}
+
+fn idExtra(id: i64) usize {
+    std.debug.assert(id >= 0);
+    return @intCast(id);
+}
+
+fn headerButtonOptions(
+    width: f32,
+    position: HeaderControlPosition,
+    style: ?dvui.Theme.Style.Name,
+) dvui.Options {
+    return .{
+        .style = style,
+        .min_size_content = .width(width),
+        .gravity_y = 0.5,
+        .margin = switch (position) {
+            .middle => .{ .x = 4, .w = 4 },
+            .trailing => .{ .x = 4 },
+        },
+        .padding = .{ .x = 6, .y = 5, .w = 6, .h = 5 },
+    };
+}

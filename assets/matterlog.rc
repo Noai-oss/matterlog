@@ -1,0 +1,2 @@
+#define IDI_MATTERLOG 101
+IDI_MATTERLOG ICON "matterlog.ico"

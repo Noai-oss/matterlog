@@ -1,0 +1,10 @@
+.idea/
+.zig-cache/
+zig-out/
+zig-pkg/
+*.swp
+
+# Matterlog runtime data
+matterlog.db
+matterlog.db-shm
+matterlog.db-wal
