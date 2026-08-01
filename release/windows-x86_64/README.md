@@ -13,8 +13,5 @@
 从仓库根目录重新生成：
 
 ```powershell
-zig build -Doptimize=ReleaseFast
-Copy-Item zig-out/bin/matterlog.exe release/windows-x86_64/matterlog.exe
-Copy-Item src/fonts/LICENSE.txt release/windows-x86_64/HarmonyOS-Sans-LICENSE.txt
-Copy-Item LICENSE release/windows-x86_64/LICENSE.txt
+.\release-windows.ps1
 ```
