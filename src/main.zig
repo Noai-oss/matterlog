@@ -37,7 +37,7 @@ fn appStart() dvui.App.StartOptions {
     _ = sdl_backend.c.SDL_SetAppMetadata(
         app_name.ptr,
         "0.1.0",
-        "com.gitcode.ooooo-create.matterlog",
+        "org.matterlog.desktop",
     );
 
     return .{

@@ -47,7 +47,12 @@ zig build test
 zig build -Doptimize=ReleaseFast
 Copy-Item zig-out/bin/matterlog.exe release/windows-x86_64/matterlog.exe
 Copy-Item src/fonts/LICENSE.txt release/windows-x86_64/HarmonyOS-Sans-LICENSE.txt
+Copy-Item LICENSE release/windows-x86_64/LICENSE.txt
 ```
+
+## 许可证
+
+Matterlog 使用 [MIT License](LICENSE)。
 
 ## 源码结构
 
@@ -62,4 +67,5 @@ assets/                             Windows ICO 与资源定义
 vendor/sqlite/                      SQLite amalgamation、版本与哈希
 release/windows-x86_64/             Windows x86_64 发布文件
 build.zig                           构建入口
+LICENSE                             Matterlog MIT 许可证
 ```

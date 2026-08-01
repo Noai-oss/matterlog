@@ -51,9 +51,15 @@ pub fn build(b: *std.Build) !void {
         .prefix,
         "bin/HarmonyOS-Sans-LICENSE.txt",
     );
+    const install_project_license = b.addInstallFileWithDir(
+        b.path("LICENSE"),
+        .prefix,
+        "bin/LICENSE.txt",
+    );
 
     b.getInstallStep().dependOn(&install_executable.step);
     b.getInstallStep().dependOn(&install_font_license.step);
+    b.getInstallStep().dependOn(&install_project_license.step);
 
     const run_command = b.addRunArtifact(executable);
 
