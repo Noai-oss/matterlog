@@ -4,11 +4,12 @@ const sdl_backend = @import("sdl-backend");
 const state = @import("app_state.zig");
 const ui = @import("ui.zig");
 
+const app_organization: [:0]const u8 = "";
 const app_name: [:0]const u8 = "Matterlog";
 const database_filename = "matterlog.db";
 const chinese_font_family = "HarmonyOS Sans SC";
 const chinese_font_bytes = @embedFile("fonts/HarmonyOS_Sans_SC.ttf");
-const app_icon_bytes = @embedFile("app-icon");
+const app_icon_bytes = @embedFile("matterlog-icon.png");
 
 const embedded_fonts = [_]dvui.Font.Source{
     .{
@@ -36,14 +37,14 @@ fn appStart() dvui.App.StartOptions {
     _ = sdl_backend.c.SDL_SetAppMetadata(
         app_name.ptr,
         "0.1.0",
-        "com.matterlog.app",
+        "com.gitcode.ooooo-create.matterlog",
     );
 
     return .{
         .size = .{ .w = 1100.0, .h = 760.0 },
         .min_size = .{ .w = 760.0, .h = 520.0 },
         .title = app_name,
-        .org = app_name,
+        .org = app_organization,
         .icon = app_icon_bytes,
     };
 }
@@ -71,7 +72,7 @@ pub fn appInit(win: *dvui.Window) !void {
 
 fn databasePath(allocator: std.mem.Allocator) ![:0]u8 {
     const raw_path = sdl_backend.c.SDL_GetPrefPath(
-        app_name.ptr,
+        app_organization.ptr,
         app_name.ptr,
     ) orelse return error.PreferencePathUnavailable;
     defer sdl_backend.c.SDL_free(raw_path);

@@ -24,15 +24,11 @@ pub fn build(b: *std.Build) !void {
         dvui_dep.module("dvui_sdl3"),
     );
 
-    // appStart 使用 SDL3 API 覆盖后端的示例应用元数据。
+    // 直接使用 SDL3 设置应用元数据并获取用户偏好目录。
     module.addImport(
         "sdl-backend",
         dvui_dep.module("sdl3"),
     );
-    module.addAnonymousImport("app-icon", .{
-        .root_source_file = b.path("assets/matterlog-icon.png"),
-    });
-
     addSqlite(b, module);
     module.addWin32ResourceFile(.{
         .file = b.path("assets/matterlog.rc"),
@@ -56,12 +52,6 @@ pub fn build(b: *std.Build) !void {
         "bin/HarmonyOS-Sans-LICENSE.txt",
     );
 
-    const compile_step = b.step(
-        "compile-sdl3-app",
-        "Compile Matterlog with the SDL3 backend",
-    );
-    compile_step.dependOn(&executable.step);
-
     b.getInstallStep().dependOn(&install_executable.step);
     b.getInstallStep().dependOn(&install_font_license.step);
 
@@ -72,8 +62,8 @@ pub fn build(b: *std.Build) !void {
     }
 
     const run_step = b.step(
-        "sdl3-app",
-        "Run Matterlog with the SDL3 backend",
+        "run",
+        "Run Matterlog",
     );
     run_step.dependOn(&run_command.step);
 
