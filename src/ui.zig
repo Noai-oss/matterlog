@@ -165,15 +165,15 @@ fn drawTaskFilterButton(
             .expand = .horizontal,
             .style = .window,
             .border = .all(1),
-            .color_fill = if (selected) dvui.themeGet().focus.opacity(0.12) else null,
-            .color_text = if (selected) dvui.themeGet().focus else null,
-            .color_border = if (selected)
+            .color_fill = if (selected) .{ .color = dvui.themeGet().focus.opacity(0.12) } else null,
+            .color_text = if (selected) .{ .color = dvui.themeGet().focus } else null,
+            .color_border = .{ .color = if (selected)
                 dvui.themeGet().focus.opacity(0.55)
             else
-                dvui.themeGet().border.opacity(0.24),
+                dvui.themeGet().border.opacity(0.24) },
             .padding = .{ .x = 5, .y = 4, .w = 5, .h = 4 },
             .margin = .{ .x = 2, .w = 2 },
-            .id_extra = @intFromEnum(filter) + 1,
+            .id_extra = @backingInt(filter) + 1,
         },
     )) {
         app.setTaskFilter(filter);
@@ -186,8 +186,8 @@ fn drawTaskButton(app: *AppState, task: *const database.Task) void {
     const selected = app.selected_task_id != null and
         app.selected_task_id.? == task.id;
     const theme = dvui.themeGet();
-    const text_color: ?dvui.Color = if (task.completed)
-        theme.color(.app1, .text)
+    const text_color: ?dvui.ColorOrGradient = if (task.completed)
+        .{ .color = theme.color(.app1, .text) }
     else
         null;
 
@@ -200,13 +200,13 @@ fn drawTaskButton(app: *AppState, task: *const database.Task) void {
             .expand = .horizontal,
             .style = .content,
             .border = .{ .x = 3 },
-            .color_fill = theme.fill,
-            .color_fill_hover = theme.color(.window, .fill),
-            .color_fill_press = theme.color(.control, .fill),
+            .color_fill = .{ .color = theme.fill },
+            .color_fill_hover = .{ .color = theme.color(.window, .fill) },
+            .color_fill_press = .{ .color = theme.color(.control, .fill) },
             .color_text = text_color,
             .color_text_hover = text_color,
             .color_text_press = text_color,
-            .color_border = if (selected) theme.focus else theme.focus.opacity(0),
+            .color_border = .{ .color = if (selected) theme.focus else theme.focus.opacity(0) },
             .margin = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
             .padding = .all(6),
             .id_extra = idExtra(task.id),
@@ -489,7 +489,7 @@ fn drawEntryCard(
 
     const metadata_options: dvui.Options = .{
         .font = dvui.Font.theme(.body).withSize(9),
-        .color_text = dvui.themeGet().text.opacity(0.42),
+        .color_text = .{ .color = dvui.themeGet().text.opacity(0.42) },
         .expand = .horizontal,
         .gravity_y = 0.5,
     };
@@ -753,7 +753,7 @@ fn drawNotice(app: *const AppState) void {
         .{},
         .{
             .font = notice_font,
-            .color_text = color,
+            .color_text = .{ .color = color },
             .expand = .horizontal,
             .padding = .{},
             .margin = .{ .x = 4, .w = 4 },

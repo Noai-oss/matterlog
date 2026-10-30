@@ -7,12 +7,13 @@ Matterlog 是一个使用 Zig、DVUI 和 SQLite 编写的本地事项进展记�
 
 ## 环境
 
-- Zig 0.16.0
-- DVUI 0.5.0-dev（`main@7426b65`，由 `build.zig.zon` 锁定）
+- Zig 0.17.0
+- DVUI 0.6.0-dev（`main@4189669`，由 `build.zig.zon` 锁定）
+- translate-c 2.0.0（用于生成 C 绑定，由 `build.zig.zon` 锁定）
 - SQLite 3.53.4（源码已放在 `vendor/sqlite`）
 - 字体：HarmonyOS Sans SC（许可文件随构建产物安装）
 
-首次构建需要联网下载 DVUI，之后可以使用本地 Zig 缓存。
+首次构建需要联网下载 DVUI、translate-c 及其依赖，之后可以使用本地 Zig 缓存。
 
 ## 开发
 

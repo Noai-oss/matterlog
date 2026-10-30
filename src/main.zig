@@ -45,6 +45,8 @@ fn appStart() dvui.App.StartOptions {
         .min_size = .{ .w = 760.0, .h = 520.0 },
         .title = app_name,
         .org = app_organization,
+        .app = app_name,
+        .persist_window_geometry = false,
         .icon = app_icon_bytes,
     };
 }

@@ -1,8 +1,16 @@
 const std = @import("std");
+const Translator = @import("translate_c").Translator;
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    const sqlite = Translator.init(b.dependency("translate_c", .{}), .{
+        .c_source_file = b.path("vendor/sqlite/sqlite3.h"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
 
     const dvui_dep = b.dependency("dvui", .{
         .target = target,
@@ -29,7 +37,7 @@ pub fn build(b: *std.Build) !void {
         "sdl-backend",
         dvui_dep.module("sdl3"),
     );
-    addSqlite(b, module);
+    addSqlite(b, module, sqlite.mod);
     module.addWin32ResourceFile(.{
         .file = b.path("assets/matterlog.rc"),
     });
@@ -63,9 +71,7 @@ pub fn build(b: *std.Build) !void {
 
     const run_command = b.addRunArtifact(executable);
 
-    if (b.args) |args| {
-        run_command.addArgs(args);
-    }
+    run_command.addPassthruArgs();
 
     const run_step = b.step(
         "run",
@@ -79,7 +85,7 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .link_libc = true,
     });
-    addSqlite(b, database_test_module);
+    addSqlite(b, database_test_module, sqlite.mod);
 
     const database_tests = b.addTest(.{
         .name = "matterlog-database-tests",
@@ -93,7 +99,7 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .link_libc = true,
     });
-    addSqlite(b, state_test_module);
+    addSqlite(b, state_test_module, sqlite.mod);
 
     const state_tests = b.addTest(.{
         .name = "matterlog-state-tests",
@@ -106,7 +112,8 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&run_state_tests.step);
 }
 
-fn addSqlite(b: *std.Build, module: *std.Build.Module) void {
+fn addSqlite(b: *std.Build, module: *std.Build.Module, bindings: *std.Build.Module) void {
+    module.addImport("sqlite", bindings);
     module.addIncludePath(b.path("vendor/sqlite"));
     module.addCSourceFile(.{
         .file = b.path("vendor/sqlite/sqlite3.c"),
