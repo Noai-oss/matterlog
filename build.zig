@@ -37,6 +37,13 @@ pub fn build(b: *std.Build) !void {
         "sdl-backend",
         dvui_dep.module("sdl3"),
     );
+    // 将 assets 中的文件提供给 @embedFile，资源仍在编译时嵌入程序。
+    module.addAnonymousImport("harmonyos-sans-sc", .{
+        .root_source_file = b.path("assets/fonts/HarmonyOS_Sans_SC.ttf"),
+    });
+    module.addAnonymousImport("matterlog-icon", .{
+        .root_source_file = b.path("assets/matterlog-icon.png"),
+    });
     addSqlite(b, module, sqlite.mod);
     module.addWin32ResourceFile(.{
         .file = b.path("assets/matterlog.rc"),
@@ -55,7 +62,7 @@ pub fn build(b: *std.Build) !void {
         .{},
     );
     const install_font_license = b.addInstallFileWithDir(
-        b.path("src/fonts/LICENSE.txt"),
+        b.path("assets/fonts/LICENSE.txt"),
         .prefix,
         "bin/HarmonyOS-Sans-LICENSE.txt",
     );

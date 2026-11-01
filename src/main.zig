@@ -1,15 +1,18 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const sdl_backend = @import("sdl-backend");
 const state = @import("app_state.zig");
 const ui = @import("ui.zig");
+const tray_module = @import("tray.zig");
+const instance_module = @import("single_instance.zig");
 
 const app_organization: [:0]const u8 = "";
 const app_name: [:0]const u8 = "Matterlog";
 const database_filename = "matterlog.db";
 const chinese_font_family = "HarmonyOS Sans SC";
-const chinese_font_bytes = @embedFile("fonts/HarmonyOS_Sans_SC.ttf");
-const app_icon_bytes = @embedFile("matterlog-icon.png");
+const chinese_font_bytes = @embedFile("harmonyos-sans-sc");
+const app_icon_bytes = @embedFile("matterlog-icon");
 
 const embedded_fonts = [_]dvui.Font.Source{
     .{
@@ -19,6 +22,9 @@ const embedded_fonts = [_]dvui.Font.Source{
 };
 
 var app: state.AppState = .{};
+var tray: tray_module.Tray = .{};
+var instance: instance_module.SingleInstance = .{};
+var startup_frames_remaining: u2 = if (builtin.os.tag == .windows) 2 else 0;
 
 pub const dvui_app: dvui.App = .{
     .config = .{ .startFn = &appStart },
@@ -27,13 +33,26 @@ pub const dvui_app: dvui.App = .{
     .frameFn = appFrame,
 };
 
-pub const main = dvui.App.main;
+pub fn main(init: std.process.Init) !u8 {
+    defer instance.deinit();
+    if (!try instance.acquire()) return 0;
+    return dvui.App.main(init);
+}
 pub const panic = dvui.App.panic;
 pub const std_options: std.Options = .{
     .logFn = dvui.App.logFn,
 };
 
 fn appStart() dvui.App.StartOptions {
+    if (builtin.os.tag == .windows) {
+        // IDI_MATTERLOG in assets/matterlog.rc. Reuse the native, multi-size
+        // icon for the window and tray instead of converting the large PNG.
+        _ = sdl_backend.c.SDL_SetHint(sdl_backend.c.SDL_HINT_WINDOWS_INTRESOURCE_ICON, "101");
+        _ = sdl_backend.c.SDL_SetHint(sdl_backend.c.SDL_HINT_WINDOWS_INTRESOURCE_ICON_SMALL, "101");
+        // DVUI/tray handles window close explicitly. Tray initialization can
+        // fail while the window is hidden; cleanup must not quit the app.
+        _ = sdl_backend.c.SDL_SetHint(sdl_backend.c.SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0");
+    }
     _ = sdl_backend.c.SDL_SetAppMetadata(
         app_name.ptr,
         "0.1.0",
@@ -47,7 +66,8 @@ fn appStart() dvui.App.StartOptions {
         .org = app_organization,
         .app = app_name,
         .persist_window_geometry = false,
-        .icon = app_icon_bytes,
+        .icon = if (builtin.os.tag == .windows) null else app_icon_bytes,
+        .hidden = builtin.os.tag == .windows,
     };
 }
 
@@ -77,6 +97,11 @@ pub fn appInit(win: *dvui.Window) !void {
     const database_path = try databasePath(win.gpa);
     defer win.gpa.free(database_path);
     try app.init(win.gpa, database_path);
+
+    tray.init(win.backend.impl.window) catch |err| {
+        std.log.warn("System tray unavailable ({s}): {s}", .{ @errorName(err), sdl_backend.c.SDL_GetError() });
+    };
+    try instance.attach(win.backend.impl.window);
 }
 
 fn databasePath(allocator: std.mem.Allocator) ![:0]u8 {
@@ -93,13 +118,35 @@ fn databasePath(allocator: std.mem.Allocator) ![:0]u8 {
 }
 
 pub fn appDeinit(win: *dvui.Window) void {
+    instance.detach();
+    tray.deinit();
     app.deinit(win.gpa);
 }
 
 pub fn appFrame() !dvui.App.Result {
+    tray.processEvents(dvui.currentWindow());
+    if (tray.quit_requested) return .close;
+    if (startup_frames_remaining == 0 and instance.takeActivationRequest()) {
+        tray_module.showWindow(dvui.currentWindow().backend.impl.window);
+    }
     ui.draw(&app);
 
     if (app.processPendingAction(dvui.currentWindow().gpa)) {
+        dvui.refresh(null, @src(), null);
+    }
+
+    if (startup_frames_remaining > 0) {
+        startup_frames_remaining -= 1;
+        const win = dvui.currentWindow();
+        // Warm up layout and fonts while hidden. Complete drawing before
+        // revealing the window; the normal event loop then presents it.
+        if (startup_frames_remaining == 0) {
+            win.endRendering(.{});
+            if (!sdl_backend.c.SDL_ShowWindow(win.backend.impl.window)) {
+                std.log.err("Could not show window: {s}", .{sdl_backend.c.SDL_GetError()});
+                return .close;
+            }
+        }
         dvui.refresh(null, @src(), null);
     }
     return .ok;

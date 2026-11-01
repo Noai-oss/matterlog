@@ -7,7 +7,7 @@ zig build -Doptimize=ReleaseFast
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Copy-Item zig-out/bin/matterlog.exe release/windows-x86_64/matterlog.exe -Force
-Copy-Item src/fonts/LICENSE.txt release/windows-x86_64/HarmonyOS-Sans-LICENSE.txt -Force
+Copy-Item assets/fonts/LICENSE.txt release/windows-x86_64/HarmonyOS-Sans-LICENSE.txt -Force
 Copy-Item LICENSE release/windows-x86_64/LICENSE.txt -Force
 
 $Sha256 = (Get-FileHash release/windows-x86_64/matterlog.exe -Algorithm SHA256).Hash

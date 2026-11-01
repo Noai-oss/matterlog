@@ -37,6 +37,8 @@ zig build test
 - **快捷提交**：新增或编辑进展时按 `Ctrl + Enter`（macOS 为 `Cmd + Enter`）。
 - **快速编辑**：双击进展正文即可进入编辑。
 - **取消操作**：重命名、编辑或删除确认时按 `Esc`，未发送的进展草稿不会被清空。
+- **Windows 系统托盘**：点击窗口关闭按钮或按 `Alt + F4` 时隐藏到托盘，当前事项和未发送草稿会保留。点击或右键托盘图标，在菜单中选择“打开 Matterlog”恢复窗口，选择“退出”关闭程序。托盘初始化失败时仍按正常方式关闭窗口。
+- **Windows 单实例**：重复启动会将已有窗口切到前台；窗口在托盘中或已最小化时会恢复显示，当前事项和草稿不变。
 
 ## 数据
 
@@ -64,10 +66,11 @@ Matterlog 使用 [MIT License](LICENSE)。
 src/main.zig                        DVUI/SDL 应用入口与主题
 src/app_state.zig                   应用状态与业务动作
 src/ui.zig                          界面布局与交互
+src/tray.zig                        Windows 系统托盘与关闭隐藏
+src/single_instance.zig             Windows 单实例与重复启动唤起
 src/database.zig                    SQLite 数据访问
-src/matterlog-icon.png              DVUI 运行时窗口图标
-src/fonts/                          HarmonyOS Sans SC 与字体许可证
-assets/                             Windows ICO 与资源定义
+assets/                             PNG/ICO 图标、Windows 资源定义与 README 截图
+assets/fonts/                       HarmonyOS Sans SC 与字体许可证
 vendor/sqlite/                      SQLite amalgamation、版本与哈希
 release/windows-x86_64/             Windows x86_64 发布文件
 build.zig                           构建入口
