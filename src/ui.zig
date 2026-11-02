@@ -251,9 +251,43 @@ fn drawDetailPanel(app: *AppState) void {
     };
 
     drawTaskHeader(app, task);
-    drawTimeline(app, task);
-    drawComposer(app, task.id);
+    drawDetailContent(app, task);
     drawNotice(app);
+}
+
+fn drawDetailContent(app: *AppState, task: *const database.Task) void {
+    const handle_size: f32 = 8;
+    var split_ratio: f32 = 0.5;
+    var panes: dvui.PanedWidget = undefined;
+    panes.init(
+        @src(),
+        .{
+            .direction = .vertical,
+            .collapsed_size = 0,
+            .split_ratio = &split_ratio,
+            .handle_size = handle_size,
+            .handle_show_distance = 24,
+        },
+        .{ .expand = .both, .max_size_content = .zero },
+    );
+    defer panes.deinit();
+
+    // Keep the chosen editor height when resizing the window. Neither pane
+    // may collapse, and a small window must not overwrite the preferred height.
+    const available = @max(1, panes.data().contentRect().h - handle_size);
+    const minimum_height = @min(100, available / 2);
+    const minimum_ratio = minimum_height / available;
+    split_ratio = 1 - std.math.clamp(app.composer_height, minimum_height, available - minimum_height) / available;
+    const previous_ratio = split_ratio;
+    panes.processEvents();
+    const dragged = split_ratio != previous_ratio;
+    split_ratio = std.math.clamp(split_ratio, minimum_ratio, 1 - minimum_ratio);
+    if (dragged) {
+        app.composer_height = available * (1 - split_ratio);
+    }
+
+    if (panes.showFirst()) drawTimeline(app, task);
+    if (panes.showSecond()) drawComposer(app, task.id);
 }
 
 fn drawTaskHeader(app: *AppState, task: *const database.Task) void {
@@ -593,7 +627,7 @@ fn drawComposer(app: *AppState, task_id: i64) void {
     var composer = dvui.box(
         @src(),
         .{ .dir = .horizontal },
-        .{ .expand = .horizontal, .margin = .{ .y = 4, .h = 4 } },
+        .{ .expand = .both, .max_size_content = .zero, .margin = .{ .h = 4 } },
     );
     defer composer.deinit();
 
@@ -608,9 +642,11 @@ fn drawComposer(app: *AppState, task_id: i64) void {
             .placeholder = "输入当前事项的最新进展……",
         },
         .{
-            .expand = .horizontal,
-            .min_size_content = .{ .h = 78 },
-            .max_size_content = dvui.Options.MaxSize.height(78),
+            .expand = .both,
+            // Wrapped text scrolls inside its allocation; its measured size
+            // must never consume the space reserved for the send button.
+            .min_size_content = .zero,
+            .max_size_content = .zero,
             .margin = .{ .w = 4 },
         },
     );

@@ -58,6 +58,7 @@ pub const AppState = struct {
     tasks: std.ArrayList(database.Task) = .empty,
 
     sidebar_ratio: f32 = 0.28,
+    composer_height: f32 = 100,
     selected_task_id: ?i64 = null,
     task_filter: TaskFilter = .active,
 
