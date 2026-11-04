@@ -49,13 +49,16 @@ zig build test
 %APPDATA%\Matterlog\matterlog.db
 ```
 
-## Windows 可执行文件
+## Windows 本地打包
 
-已编译的 Windows x86_64 程序位于 `release/windows-x86_64/`。重新生成：
+在 Windows 上安装上述开发环境后，使用 PowerShell 5.1 或更新版本运行：
 
 ```powershell
 .\release-windows.ps1
 ```
+
+生成的压缩包位于 `release/matterlog-v<version>-windows-x86_64.zip`。
+解压后双击 `matterlog/matterlog.exe` 即可运行，无需安装开发环境。
 
 ## 许可证
 
@@ -73,8 +76,9 @@ src/database.zig                    SQLite 数据访问
 assets/                             PNG/ICO 图标、Windows 资源定义与 README 截图
 assets/fonts/                       HarmonyOS Sans SC 与字体许可证
 vendor/sqlite/                      SQLite amalgamation、版本与哈希
-release/windows-x86_64/             Windows x86_64 发布文件
+packaging/windows/README.md         包内静态使用说明
+release/                           本地 ZIP 等生成产物（Git 忽略）
 build.zig                           构建入口
-release-windows.ps1                 Windows x86_64 发布脚本
+release-windows.ps1                 Windows x86_64 ZIP 打包脚本
 LICENSE                             Matterlog MIT 许可证
 ```
