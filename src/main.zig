@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const dvui = @import("dvui");
 const sdl_backend = @import("sdl-backend");
 const state = @import("app_state.zig");
@@ -55,7 +56,7 @@ fn appStart() dvui.App.StartOptions {
     }
     _ = sdl_backend.c.SDL_SetAppMetadata(
         app_name.ptr,
-        "0.1.0",
+        build_options.app_version.ptr,
         "org.matterlog.desktop",
     );
 

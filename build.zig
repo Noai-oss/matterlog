@@ -4,6 +4,8 @@ const Translator = @import("translate_c").Translator;
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const build_options = b.addOptions();
+    build_options.addOption([:0]const u8, "app_version", @import("build.zig.zon").version);
 
     const sqlite = Translator.init(b.dependency("translate_c", .{}), .{
         .c_source_file = b.path("vendor/sqlite/sqlite3.h"),
@@ -27,6 +29,7 @@ pub fn build(b: *std.Build) !void {
         .link_libc = true,
     });
 
+    module.addOptions("build_options", build_options);
     module.addImport(
         "dvui",
         dvui_dep.module("dvui_sdl3"),
