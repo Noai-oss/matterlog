@@ -1,26 +1,63 @@
+#requires -Version 5.1
 $ErrorActionPreference = 'Stop'
 
-$ZigVersion = (zig version).Trim()
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-zig build -Doptimize=ReleaseFast
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-Copy-Item zig-out/bin/matterlog.exe release/windows-x86_64/matterlog.exe -Force
-Copy-Item assets/fonts/LICENSE.txt release/windows-x86_64/HarmonyOS-Sans-LICENSE.txt -Force
-Copy-Item LICENSE release/windows-x86_64/LICENSE.txt -Force
-
-$Sha256 = (Get-FileHash release/windows-x86_64/matterlog.exe -Algorithm SHA256).Hash
-$Readme = 'release/windows-x86_64/README.md'
-$Content = Get-Content $Readme -Raw -Encoding UTF8
-if ($Content -notmatch 'EXE SHA-256：`[0-9A-Fa-f]{64}`') {
-    throw 'README 中未找到 EXE SHA-256'
+$ManifestPath = Join-Path $PSScriptRoot 'build.zig.zon'
+$ReadmePath = Join-Path $PSScriptRoot 'packaging/windows/README.md'
+$ProjectLicensePath = Join-Path $PSScriptRoot 'LICENSE'
+$FontLicensePath = Join-Path $PSScriptRoot 'assets/fonts/LICENSE.txt'
+foreach ($InputPath in @($ManifestPath, $ReadmePath, $ProjectLicensePath, $FontLicensePath)) {
+    if (-not (Test-Path -LiteralPath $InputPath -PathType Leaf)) {
+        throw "Required input not found: $InputPath"
+    }
 }
-$Content = $Content -replace 'EXE SHA-256：`[0-9A-Fa-f]{64}`', "EXE SHA-256：``$Sha256``"
-if ($Content -notmatch '(?m)^- 构建工具：Zig [^\r\n]+') {
-    throw 'README 中未找到 Zig 构建工具版本'
-}
-$Content = $Content -replace '(?m)^- 构建工具：Zig [^\r\n]+', "- 构建工具：Zig $ZigVersion"
-[System.IO.File]::WriteAllText($Readme, $Content, [System.Text.UTF8Encoding]::new($false))
 
-Write-Host "matterlog.exe SHA-256: $Sha256"
+# Fail on an absent or ambiguous version instead of guessing a package name.
+$VersionFields = [regex]::Matches(
+    (Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8),
+    '(?m)^\s*\.version\s*=\s*"([^"]+)"\s*,'
+)
+if ($VersionFields.Count -ne 1) {
+    throw 'Expected exactly one project version in build.zig.zon.'
+}
+$Version = $VersionFields[0].Groups[1].Value
+if ($Version -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') {
+    throw "Invalid project version in build.zig.zon: $Version"
+}
+
+$ReleaseRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'release'))
+$ZipPath = Join-Path $ReleaseRoot "matterlog-v$Version-windows-x86_64.zip"
+# Use a fresh install/staging directory so old outputs cannot enter the ZIP.
+$WorkDir = Join-Path $ReleaseRoot ('.package-' + [guid]::NewGuid().ToString('N'))
+$InstallDir = Join-Path $WorkDir 'install'
+$PackageDir = Join-Path $WorkDir 'matterlog'
+$StagedZip = Join-Path $WorkDir 'package.zip'
+
+Push-Location -LiteralPath $PSScriptRoot
+try {
+    New-Item -ItemType Directory -Path $PackageDir -Force | Out-Null
+
+    & zig build -Dtarget=x86_64-windows-gnu -Dcpu=baseline -Doptimize=ReleaseFast --prefix $InstallDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "zig build failed with exit code $LASTEXITCODE."
+    }
+
+    Copy-Item -LiteralPath (Join-Path $InstallDir 'bin/matterlog.exe') -Destination $PackageDir
+    Copy-Item -LiteralPath $ReadmePath -Destination (Join-Path $PackageDir 'README.md')
+    Copy-Item -LiteralPath $ProjectLicensePath -Destination (Join-Path $PackageDir 'LICENSE.txt')
+    Copy-Item -LiteralPath $FontLicensePath -Destination (Join-Path $PackageDir 'HarmonyOS-Sans-LICENSE.txt')
+
+    Compress-Archive -LiteralPath $PackageDir -DestinationPath $StagedZip -CompressionLevel Optimal
+    Move-Item -LiteralPath $StagedZip -Destination $ZipPath -Force
+}
+finally {
+    Pop-Location
+    if (Test-Path -LiteralPath $WorkDir) {
+        $ResolvedWorkDir = (Resolve-Path -LiteralPath $WorkDir).ProviderPath
+        if ([IO.Path]::GetDirectoryName($ResolvedWorkDir) -ne $ReleaseRoot) {
+            throw "Refusing to clean a directory outside the release directory: $ResolvedWorkDir"
+        }
+        Remove-Item -LiteralPath $ResolvedWorkDir -Recurse -Force
+    }
+}
+
+Write-Host "Created ZIP: $ZipPath"
