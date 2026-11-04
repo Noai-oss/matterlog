@@ -176,7 +176,9 @@ fn drawTaskFilterButton(
             .id_extra = @backingInt(filter) + 1,
         },
     )) {
-        app.setTaskFilter(filter);
+        app.setTaskFilter(dvui.currentWindow().gpa, filter) catch {
+            app.notice = .draft_unavailable;
+        };
         dvui.focusWidget(null, null, null);
         dvui.refresh(null, @src(), null);
     }
@@ -212,7 +214,9 @@ fn drawTaskButton(app: *AppState, task: *const database.Task) void {
             .id_extra = idExtra(task.id),
         },
     )) {
-        app.selectTask(task.id);
+        app.selectTask(dvui.currentWindow().gpa, task.id) catch {
+            app.notice = .draft_unavailable;
+        };
         dvui.focusWidget(null, null, null);
         dvui.refresh(null, @src(), null);
     }
@@ -635,7 +639,7 @@ fn drawComposer(app: *AppState, task_id: i64) void {
     editor.init(
         @src(),
         .{
-            .text = .{ .buffer = &app.draft },
+            .text = .{ .buffer = &app.draft().buffer },
             .multiline = true,
             .break_lines = true,
             .scroll_horizontal = false,
@@ -648,6 +652,7 @@ fn drawComposer(app: *AppState, task_id: i64) void {
             .min_size_content = .zero,
             .max_size_content = .zero,
             .margin = .{ .w = 4 },
+            .id_extra = idExtra(task_id),
         },
     );
 
@@ -767,6 +772,7 @@ fn drawNotice(app: *const AppState) void {
         .entry_updated => "进展已修改。",
         .entry_deleted => "进展已删除。",
         .database_error => "数据库操作失败，请查看终端日志。",
+        .draft_unavailable => "无法打开该事项的输入区，当前草稿已保留。",
     };
 
     const notice_font = dvui.Font.theme(.body).withSize(9).withLineHeight(1.0);
@@ -777,6 +783,7 @@ fn drawNotice(app: *const AppState) void {
         .empty_title,
         .empty_entry,
         .database_error,
+        .draft_unavailable,
         => dvui.themeGet().color(.err, .fill),
         else => dvui.themeGet().focus,
     };

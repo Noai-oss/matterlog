@@ -19,6 +19,7 @@ pub const Notice = enum {
     entry_updated,
     entry_deleted,
     database_error,
+    draft_unavailable,
 };
 
 pub const PendingAction = union(enum) {
@@ -53,6 +54,10 @@ pub const TaskFilter = enum {
     all,
 };
 
+pub const Draft = struct {
+    buffer: [entry_capacity]u8 = @splat(0),
+};
+
 pub const AppState = struct {
     store: ?database.Database = null,
     tasks: std.ArrayList(database.Task) = .empty,
@@ -62,7 +67,8 @@ pub const AppState = struct {
     selected_task_id: ?i64 = null,
     task_filter: TaskFilter = .active,
 
-    draft: [entry_capacity]u8 = @splat(0),
+    // Session-local drafts survive task reloads and temporary filter changes.
+    drafts: std.AutoHashMapUnmanaged(i64, Draft) = .empty,
     rename_buffer: [title_capacity]u8 = @splat(0),
     edit_buffer: [entry_capacity]u8 = @splat(0),
 
@@ -89,6 +95,7 @@ pub const AppState = struct {
     }
 
     pub fn deinit(self: *AppState, allocator: std.mem.Allocator) void {
+        self.drafts.deinit(allocator);
         database.deinitTasks(allocator, &self.tasks);
         if (self.store) |*store| store.close();
         self.* = .{};
@@ -137,25 +144,23 @@ pub const AppState = struct {
         return null;
     }
 
-    pub fn selectTask(self: *AppState, task_id: i64) void {
-        self.resetTaskInteraction();
-        self.selected_task_id = task_id;
+    pub fn draft(self: *AppState) *Draft {
+        return self.drafts.getPtr(self.selected_task_id.?).?;
     }
 
-    pub fn setTaskFilter(self: *AppState, filter: TaskFilter) void {
+    pub fn selectTask(self: *AppState, allocator: std.mem.Allocator, task_id: i64) !void {
+        try self.setSelectedTask(allocator, task_id);
+    }
+
+    pub fn setTaskFilter(self: *AppState, allocator: std.mem.Allocator, filter: TaskFilter) !void {
         if (self.task_filter == filter) return;
 
+        const selected_id = visibleTaskId(self.tasks.items, filter, self.selected_task_id);
+        // Allocate before changing the filter/selection: an allocation failure
+        // must leave the currently displayed draft usable.
+        try self.setSelectedTask(allocator, selected_id);
         self.cancelMode();
         self.task_filter = filter;
-
-        if (self.selected_task_id) |selected_id| {
-            for (self.tasks.items) |task| {
-                if (task.id == selected_id and self.taskVisible(&task)) return;
-            }
-        }
-
-        self.resetTaskInteraction();
-        self.selected_task_id = self.firstVisibleTaskId();
     }
 
     pub fn taskVisible(self: *const AppState, task: *const database.Task) bool {
@@ -292,14 +297,9 @@ pub const AppState = struct {
             }
             return;
         };
-        const previous_selected_id = self.selected_task_id;
-
         try self.storePtr().setTaskCompleted(task_id, completed);
         try self.reloadData(allocator, task_id);
 
-        if (self.selected_task_id != previous_selected_id) {
-            self.resetTaskInteraction();
-        }
         self.notice = if (self.selected_task_id == null)
             .none
         else if (completed)
@@ -316,9 +316,9 @@ pub const AppState = struct {
         const preferred_id = self.replacementTaskId(task_id);
         try self.storePtr().deleteTask(task_id);
         try self.reloadData(allocator, preferred_id);
+        _ = self.drafts.remove(task_id);
 
         self.mode = .none;
-        clearBuffer(self.draft[0..]);
         clearBuffer(self.rename_buffer[0..]);
         clearBuffer(self.edit_buffer[0..]);
         self.scroll_to_latest = false;
@@ -333,16 +333,19 @@ pub const AppState = struct {
         allocator: std.mem.Allocator,
         task_id: i64,
     ) !void {
-        const body = trimmedBuffer(self.draft[0..]);
+        const task_draft = self.drafts.getPtr(task_id) orelse return;
+        const body = trimmedBuffer(&task_draft.buffer);
         if (body.len == 0) {
             self.notice = .empty_entry;
             return;
         }
 
         try self.storePtr().createEntry(task_id, body);
+        // The insert has committed. Clear only this task's draft, even if the
+        // subsequent refresh fails, so retrying cannot submit it twice.
+        clearBuffer(&task_draft.buffer);
         try self.reloadData(allocator, task_id);
 
-        clearBuffer(self.draft[0..]);
         self.scroll_to_latest = true;
         self.focus_composer = true;
         self.composer_ime_active = false;
@@ -393,24 +396,10 @@ pub const AppState = struct {
         errdefer database.deinitTasks(allocator, &new_tasks);
 
         const wanted_id = preferred_task_id orelse self.selected_task_id;
+        const selected_id = visibleTaskId(new_tasks.items, self.task_filter, wanted_id);
+        try self.setSelectedTask(allocator, selected_id);
         database.deinitTasks(allocator, &self.tasks);
         self.tasks = new_tasks;
-
-        if (self.tasks.items.len == 0) {
-            self.selected_task_id = null;
-            return;
-        }
-
-        if (wanted_id) |id| {
-            for (self.tasks.items) |task| {
-                if (task.id == id and self.taskVisible(&task)) {
-                    self.selected_task_id = id;
-                    return;
-                }
-            }
-        }
-
-        self.selected_task_id = self.firstVisibleTaskId();
     }
 
     fn storePtr(self: *AppState) *database.Database {
@@ -428,16 +417,18 @@ pub const AppState = struct {
         return self.selected_task_id;
     }
 
-    fn firstVisibleTaskId(self: *const AppState) ?i64 {
-        for (self.tasks.items) |*task| {
-            if (self.taskVisible(task)) return task.id;
+    fn setSelectedTask(self: *AppState, allocator: std.mem.Allocator, task_id: ?i64) !void {
+        if (task_id) |id| {
+            const result = try self.drafts.getOrPut(allocator, id);
+            if (!result.found_existing) result.value_ptr.* = .{};
         }
-        return null;
+        if (self.selected_task_id == task_id) return;
+        self.resetTaskInteraction();
+        self.selected_task_id = task_id;
     }
 
     fn resetTaskInteraction(self: *AppState) void {
         self.cancelMode();
-        clearBuffer(self.draft[0..]);
         self.scroll_to_latest = false;
         self.focus_composer = false;
         self.composer_ime_active = false;
@@ -448,6 +439,21 @@ pub const AppState = struct {
         std.log.err("Matterlog database operation failed: {s}", .{@errorName(err)});
     }
 };
+
+fn visibleTaskId(tasks: []const database.Task, filter: TaskFilter, preferred: ?i64) ?i64 {
+    var first: ?i64 = null;
+    for (tasks) |task| {
+        const visible = switch (filter) {
+            .active => !task.completed,
+            .completed => task.completed,
+            .all => true,
+        };
+        if (!visible) continue;
+        if (task.id == preferred) return task.id;
+        if (first == null) first = task.id;
+    }
+    return first;
+}
 
 fn clearBuffer(buffer: []u8) void {
     @memset(buffer, 0);
@@ -476,7 +482,9 @@ fn trimmedBuffer(buffer: []const u8) []const u8 {
 
 test "cancelMode clears only the active mode buffer" {
     var app: AppState = .{};
-    setBuffer(app.draft[0..], "draft stays");
+    defer app.deinit(std.testing.allocator);
+    try app.selectTask(std.testing.allocator, 7);
+    setBuffer(&app.draft().buffer, "draft stays");
     setBuffer(app.rename_buffer[0..], "temporary title");
     app.mode = .{ .rename_task = 7 };
     app.notice = .empty_title;
@@ -486,7 +494,7 @@ test "cancelMode clears only the active mode buffer" {
     try std.testing.expect(!app.hasActiveMode());
     try std.testing.expectEqual(Notice.none, app.notice);
     try std.testing.expectEqualStrings("", bufferText(app.rename_buffer[0..]));
-    try std.testing.expectEqualStrings("draft stays", bufferText(app.draft[0..]));
+    try std.testing.expectEqualStrings("draft stays", bufferText(&app.draft().buffer));
 
     setBuffer(app.edit_buffer[0..], "temporary edit");
     app.mode = .{ .edit_entry = 11 };
@@ -502,17 +510,142 @@ test "cancelMode clears only the active mode buffer" {
     try std.testing.expectEqualStrings("", bufferText(app.edit_buffer[0..]));
     try std.testing.expect(!app.edit_ime_active);
     try std.testing.expectEqual(null, app.last_entry_click);
-    try std.testing.expectEqualStrings("draft stays", bufferText(app.draft[0..]));
+    try std.testing.expectEqualStrings("draft stays", bufferText(&app.draft().buffer));
 }
 
 test "cancelMode leaves draft intact for confirmation modes" {
     var app: AppState = .{};
-    setBuffer(app.draft[0..], "unsent progress");
+    defer app.deinit(std.testing.allocator);
+    try app.selectTask(std.testing.allocator, 7);
+    setBuffer(&app.draft().buffer, "unsent progress");
     app.mode = .{ .confirm_delete_entry = 13 };
     app.notice = .confirm_delete_entry;
 
     app.cancelMode();
 
     try std.testing.expect(!app.hasActiveMode());
-    try std.testing.expectEqualStrings("unsent progress", bufferText(app.draft[0..]));
+    try std.testing.expectEqualStrings("unsent progress", bufferText(&app.draft().buffer));
+}
+
+test "new tasks and repeated selection keep independent exact drafts" {
+    const allocator = std.testing.allocator;
+    var app: AppState = .{};
+    try app.init(allocator, ":memory:");
+    defer app.deinit(allocator);
+
+    try app.processCreateTask(allocator);
+    const a = app.selected_task_id.?;
+    const text = "  中文草稿\n\nEnglish ✅\t ";
+    setBuffer(&app.draft().buffer, text);
+    try app.selectTask(allocator, a);
+    try std.testing.expectEqualStrings(text, bufferText(&app.draft().buffer));
+
+    try app.processCreateTask(allocator);
+    const b = app.selected_task_id.?;
+    try std.testing.expect(a != b);
+    try std.testing.expectEqualStrings("", bufferText(&app.draft().buffer));
+    setBuffer(&app.draft().buffer, "B draft");
+    try app.selectTask(allocator, a);
+    try std.testing.expectEqualStrings(text, bufferText(&app.draft().buffer));
+    try app.selectTask(allocator, b);
+    try std.testing.expectEqualStrings("B draft", bufferText(&app.draft().buffer));
+}
+
+test "filters completion and reopening preserve drafts including an empty view" {
+    const allocator = std.testing.allocator;
+    var app: AppState = .{};
+    try app.init(allocator, ":memory:");
+    defer app.deinit(allocator);
+    try app.processCreateTask(allocator);
+    const a = app.selected_task_id.?;
+    setBuffer(&app.draft().buffer, "draft A");
+    try app.processCreateTask(allocator);
+    const b = app.selected_task_id.?;
+    setBuffer(&app.draft().buffer, "draft B");
+
+    try app.setTaskFilter(allocator, .completed);
+    try std.testing.expectEqual(null, app.selected_task_id);
+    try app.setTaskFilter(allocator, .active);
+    try std.testing.expectEqual(a, app.selected_task_id.?);
+    try std.testing.expectEqualStrings("draft A", bufferText(&app.draft().buffer));
+    try app.processToggleTaskCompleted(allocator, a);
+    try std.testing.expectEqual(b, app.selected_task_id.?);
+    try std.testing.expectEqualStrings("draft B", bufferText(&app.draft().buffer));
+    try app.setTaskFilter(allocator, .completed);
+    try std.testing.expectEqualStrings("draft A", bufferText(&app.draft().buffer));
+    try app.processToggleTaskCompleted(allocator, a);
+    try std.testing.expectEqual(null, app.selected_task_id);
+    try app.setTaskFilter(allocator, .all);
+    try std.testing.expectEqual(a, app.selected_task_id.?);
+    try std.testing.expectEqualStrings("draft A", bufferText(&app.draft().buffer));
+}
+
+test "sending and deletion clear only the corresponding draft" {
+    const allocator = std.testing.allocator;
+    var app: AppState = .{};
+    try app.init(allocator, ":memory:");
+    defer app.deinit(allocator);
+    try app.processCreateTask(allocator);
+    const a = app.selected_task_id.?;
+    setBuffer(&app.draft().buffer, "draft A");
+    try app.processCreateTask(allocator);
+    const b = app.selected_task_id.?;
+    setBuffer(&app.draft().buffer, "draft B");
+    try app.processCreateEntry(allocator, b);
+    try std.testing.expectEqualStrings("", bufferText(&app.draft().buffer));
+    try std.testing.expectEqualStrings("draft B", app.selectedTask().?.entries.items[0].body);
+
+    setBuffer(&app.draft().buffer, " \t\n");
+    try app.processCreateEntry(allocator, b);
+    try std.testing.expectEqual(Notice.empty_entry, app.notice);
+    try std.testing.expectEqualStrings(" \t\n", bufferText(&app.draft().buffer));
+    try app.processDeleteTask(allocator, b);
+    try std.testing.expect(!app.drafts.contains(b));
+    try std.testing.expectEqual(a, app.selected_task_id.?);
+    try std.testing.expectEqualStrings("draft A", bufferText(&app.draft().buffer));
+    try app.processDeleteTask(allocator, a);
+    try std.testing.expectEqual(null, app.selected_task_id);
+    try std.testing.expectEqual(@as(u32, 0), app.drafts.count());
+}
+
+test "failed insert retains draft and failed refresh cannot resubmit committed text" {
+    const allocator = std.testing.allocator;
+    var app: AppState = .{};
+    try app.init(allocator, ":memory:");
+    defer app.deinit(allocator);
+    try app.processCreateTask(allocator);
+    const id = app.selected_task_id.?;
+    setBuffer(&app.draft().buffer, "keep on failure");
+    const c = @import("sqlite");
+    try std.testing.expectEqual(c.SQLITE_OK, c.sqlite3_exec(app.storePtr().handle, "PRAGMA query_only = ON", null, null, null));
+    try std.testing.expectError(error.DatabaseOperationFailed, app.processCreateEntry(allocator, id));
+    try std.testing.expectEqualStrings("keep on failure", bufferText(&app.draft().buffer));
+    try std.testing.expectEqual(c.SQLITE_OK, c.sqlite3_exec(app.storePtr().handle, "PRAGMA query_only = OFF", null, null, null));
+
+    var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    try std.testing.expectError(error.OutOfMemory, app.processCreateEntry(failing.allocator(), id));
+    try std.testing.expectEqualStrings("", bufferText(&app.draft().buffer));
+    try app.processCreateEntry(allocator, id);
+    try app.reloadData(allocator, id);
+    try std.testing.expectEqual(@as(usize, 1), app.selectedTask().?.entries.items.len);
+}
+
+test "failed allocation leaves selection and existing draft intact" {
+    const allocator = std.testing.allocator;
+    var app: AppState = .{};
+    defer app.deinit(allocator);
+    try app.selectTask(allocator, 1);
+    setBuffer(&app.draft().buffer, "keep me");
+    var failing = std.testing.FailingAllocator.init(allocator, .{ .fail_index = 0 });
+    // Fill the current map capacity so that the next task requires allocation.
+    var id: i64 = 2;
+    while (true) : (id += 1) {
+        app.selectTask(failing.allocator(), id) catch |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            try std.testing.expectEqual(id - 1, app.selected_task_id.?);
+            break;
+        };
+    }
+    try app.selectTask(allocator, 1);
+    try std.testing.expectEqualStrings("keep me", bufferText(&app.draft().buffer));
 }
