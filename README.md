@@ -57,15 +57,8 @@ zig build test
 .\release-windows.ps1
 ```
 
-脚本会生成 `release/matterlog-v<version>-windows-x86_64.zip`，可直接通过通讯软件发送。
-也可以从其他工作目录通过脚本路径调用；输入和输出均相对于脚本所在的仓库目录定位。
-
-ZIP 中的 `matterlog/` 文件夹包含 `matterlog.exe`、使用说明和两个许可证。
-接收者解压后双击 EXE 即可使用，无需安装开发环境。
-
-应用版本统一维护在 `build.zig.zon`，构建时传给 SDL 应用元数据，并用于 ZIP 文件名。
-打包使用 Windows x86_64 目标、基线 CPU 和 `ReleaseFast` 优化；每次使用独立的临时目录，成功后更新同版本 ZIP。
-`release/` 中的生成文件不由 Git 跟踪，仓库仅维护源码、构建资源和静态使用说明。
+生成的压缩包位于 `release/matterlog-v<version>-windows-x86_64.zip`。
+解压后双击 `matterlog/matterlog.exe` 即可运行，无需安装开发环境。
 
 ## 许可证
 
