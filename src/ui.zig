@@ -2,6 +2,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const database = @import("database.zig");
 const state = @import("app_state.zig");
+const text_editor = @import("text_editor.zig");
 
 const AppState = state.AppState;
 const TaskFilter = state.TaskFilter;
@@ -28,6 +29,7 @@ pub fn draw(app: *AppState) void {
 
 fn processEscapeShortcut(app: *AppState, root_data: *dvui.WidgetData) void {
     if (!app.hasActiveMode()) return;
+    if (app.edit_history.composing or app.rename_history.composing) return;
 
     for (dvui.events()) |*event| {
         if (event.handled or event.evt != .key) continue;
@@ -128,7 +130,7 @@ fn drawSidebarHeader(app: *AppState) void {
         },
     );
 
-    if (dvui.button(@src(), "新建", .{}, .{ .style = .control })) {
+    if (dvui.button(@src(), "新建", .{}, .{ .style = .control, .tag = if (@import("builtin").is_test) "new-task" else null })) {
         app.pending = .create_task;
     }
 }
@@ -212,6 +214,7 @@ fn drawTaskButton(app: *AppState, task: *const database.Task) void {
             .margin = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
             .padding = .all(6),
             .id_extra = idExtra(task.id),
+            .tag = if (@import("builtin").is_test) task.title else null,
         },
     )) {
         app.selectTask(dvui.currentWindow().gpa, task.id) catch {
@@ -414,6 +417,7 @@ fn drawRenameEditor(app: *AppState, task_id: i64) void {
         .{
             .expand = .horizontal,
             .gravity_y = 0.5,
+            .tag = if (@import("builtin").is_test) "rename" else null,
             .margin = .{ .w = 4 },
             .padding = .{ .x = 6, .y = 5, .w = 6, .h = 5 },
         },
@@ -424,7 +428,8 @@ fn drawRenameEditor(app: *AppState, task_id: i64) void {
         editor.textLayout.selection.selectAll();
     }
 
-    editor.processEvents();
+    const edit_result = text_editor.process(&editor, &app.rename_history, false);
+    if (edit_result.history_failed) app.notice = .history_unavailable;
     editor.draw();
     const enter_pressed = editor.enter_pressed;
     editor.deinit();
@@ -587,6 +592,7 @@ fn drawEntryEditor(app: *AppState, entry_id: i64) void {
         .{
             .expand = .horizontal,
             .min_size_content = .{ .h = 92 },
+            .tag = if (@import("builtin").is_test) "entry-editor" else null,
             .max_size_content = dvui.Options.MaxSize.height(92),
             .margin = .{ .y = 4, .h = 4 },
         },
@@ -597,11 +603,8 @@ fn drawEntryEditor(app: *AppState, entry_id: i64) void {
         editor.textLayout.selection.moveCursor(std.math.maxInt(usize), false);
     }
 
-    const shortcut_pressed = processSubmitShortcut(
-        &app.edit_ime_active,
-        &editor,
-    );
-    editor.processEvents();
+    const edit_result = text_editor.process(&editor, &app.edit_history, true);
+    if (edit_result.history_failed) app.notice = .history_unavailable;
     editor.draw();
     editor.deinit();
 
@@ -618,7 +621,7 @@ fn drawEntryEditor(app: *AppState, entry_id: i64) void {
         .{},
         .{ .style = .highlight },
     );
-    if (shortcut_pressed or save_clicked) {
+    if (edit_result.submit or save_clicked) {
         app.pending = .{ .update_entry = entry_id };
     }
     if (dvui.button(@src(), "取消", .{}, .{ .margin = .{ .x = 4, .y = 4, .h = 4 } })) {
@@ -653,6 +656,7 @@ fn drawComposer(app: *AppState, task_id: i64) void {
             .max_size_content = .zero,
             .margin = .{ .w = 4 },
             .id_extra = idExtra(task_id),
+            .tag = if (@import("builtin").is_test) "composer" else null,
         },
     );
 
@@ -661,11 +665,8 @@ fn drawComposer(app: *AppState, task_id: i64) void {
         app.focus_composer = false;
     }
 
-    const shortcut_pressed = processSubmitShortcut(
-        &app.composer_ime_active,
-        &editor,
-    );
-    editor.processEvents();
+    const edit_result = text_editor.process(&editor, &app.draft().history, true);
+    if (edit_result.history_failed) app.notice = .history_unavailable;
     editor.draw();
     editor.deinit();
 
@@ -680,48 +681,9 @@ fn drawComposer(app: *AppState, task_id: i64) void {
             .margin = .{ .x = 4 },
         },
     );
-    if (shortcut_pressed or send_clicked) {
+    if (edit_result.submit or send_clicked) {
         app.pending = .{ .create_entry = task_id };
     }
-}
-
-fn processSubmitShortcut(
-    ime_active: *bool,
-    editor: *dvui.TextEntryWidget,
-) bool {
-    var submit = false;
-
-    for (dvui.events()) |*event| {
-        if (!editor.matchEvent(event)) continue;
-
-        switch (event.evt) {
-            .text => |text_event| switch (text_event.action) {
-                .value => |value| {
-                    const text = std.mem.sliceTo(value.txt, 0);
-                    ime_active.* = value.selected and text.len != 0;
-                },
-                .selection => {},
-            },
-            .key => |key| {
-                if (key.code != .enter or
-                    (key.action != .down and key.action != .repeat) or
-                    !key.mod.matchBind("ctrl/cmd"))
-                {
-                    continue;
-                }
-
-                // Consume repeats too: holding the shortcut must create at
-                // most one entry and must never insert a newline.
-                event.handle(@src(), editor.data());
-                if (key.action == .down and !ime_active.*) {
-                    submit = true;
-                }
-            },
-            else => {},
-        }
-    }
-
-    return submit;
 }
 
 fn entryBodyDoubleClicked(
@@ -773,6 +735,7 @@ fn drawNotice(app: *const AppState) void {
         .entry_deleted => "进展已删除。",
         .database_error => "数据库操作失败，请查看终端日志。",
         .draft_unavailable => "无法打开该事项的输入区，当前草稿已保留。",
+        .history_unavailable => "无法保留撤销历史，当前文字仍已保留。",
     };
 
     const notice_font = dvui.Font.theme(.body).withSize(9).withLineHeight(1.0);
@@ -784,6 +747,7 @@ fn drawNotice(app: *const AppState) void {
         .empty_entry,
         .database_error,
         .draft_unavailable,
+        .history_unavailable,
         => dvui.themeGet().color(.err, .fill),
         else => dvui.themeGet().focus,
     };

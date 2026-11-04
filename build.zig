@@ -117,9 +117,27 @@ pub fn build(b: *std.Build) !void {
     });
     const run_state_tests = b.addRunArtifact(state_tests);
 
+    const dvui_testing = b.dependency("dvui", .{
+        .target = target,
+        .optimize = optimize,
+        .backend = .testing,
+    });
+    const editor_test_module = b.createModule(.{
+        .root_source_file = b.path("src/ui_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    editor_test_module.addImport("dvui", dvui_testing.module("dvui_testing"));
+    addSqlite(b, editor_test_module, sqlite.mod);
+    const editor_tests = b.addTest(.{
+        .name = "matterlog-editor-tests",
+        .root_module = editor_test_module,
+    });
+
     const test_step = b.step("test", "Run Matterlog tests");
     test_step.dependOn(&run_database_tests.step);
     test_step.dependOn(&run_state_tests.step);
+    test_step.dependOn(&b.addRunArtifact(editor_tests).step);
 }
 
 fn addSqlite(b: *std.Build, module: *std.Build.Module, bindings: *std.Build.Module) void {
