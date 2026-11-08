@@ -9,8 +9,8 @@ const submit_key = if (@import("builtin").os.tag == .macos) "Cmd+Enter" else "Ct
 
 const AppState = state.AppState;
 const TaskFilter = state.TaskFilter;
-const header_action_button_width: f32 = 64;
-const header_secondary_button_width: f32 = 32;
+const header_action_button_width: f32 = 72;
+const header_secondary_button_width: f32 = 40;
 
 const HeaderControlPosition = enum { middle, trailing };
 
@@ -535,7 +535,7 @@ fn drawEntryCard(
     body.deinit();
 
     const metadata_options: dvui.Options = .{
-        .font = dvui.Font.theme(.body).withSize(10),
+        .font = dvui.Font.theme(.body).withSize(11),
         .color_text = .{ .color = theme.mutedText() },
         .expand = .horizontal,
         .max_size_content = .width(0),
@@ -751,7 +751,7 @@ fn drawNotice(app: *const AppState) void {
         .history_unavailable => "无法保留撤销历史，当前文字仍已保留。",
     };
 
-    const notice_font = dvui.Font.theme(.body).withSize(10).withLineHeight(1.0);
+    const notice_font = dvui.Font.theme(.body).withSize(11).withLineHeight(1.0);
     const failed = switch (app.notice) {
         .confirm_delete_task,
         .confirm_delete_entry,
@@ -796,7 +796,7 @@ fn drawNotice(app: *const AppState) void {
 
 fn drawHint(message: []const u8, tag: []const u8) void {
     dvui.labelNoFmt(@src(), message, .{}, .{
-        .font = dvui.Font.theme(.body).withSize(9),
+        .font = dvui.Font.theme(.body).withSize(10),
         .color_text = .{ .color = theme.mutedText() },
         .expand = .horizontal,
         .max_size_content = .width(0),
@@ -807,7 +807,7 @@ fn drawHint(message: []const u8, tag: []const u8) void {
 
 fn entryActionOptions(tag: []const u8) dvui.Options {
     return .{
-        .font = dvui.Font.theme(.body).withSize(10),
+        .font = dvui.Font.theme(.body).withSize(11),
         .color_text = .{ .color = theme.mutedText() },
         .color_fill = .{ .color = dvui.themeGet().fill },
         .color_fill_hover = .{ .color = dvui.themeGet().focus.opacity(0.10) },

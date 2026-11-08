@@ -1,14 +1,18 @@
-# HarmonyOS Sans SC
+# Embedded fonts
 
-Matterlog uses HarmonyOS Sans SC.
+## LXGW WenKai / 霞鹜文楷
 
-- Source: <https://gitee.com/openharmony/global_system_resources/tree/6b8decf6f1096706940242fd6784248b9c503c99/fonts>
-- Font: `HarmonyOS_Sans_SC.ttf`
-- Font SHA-256: `8978e05044e7089ad6a9de38c505c8148305607983487435a916d2610700a7ca`
-- License: HarmonyOS Sans Fonts License Agreement; see `LICENSE.txt`
+Matterlog uses the proportional Medium face for Chinese and Latin text throughout
+the interface, including titles, controls, records and text editors. The original
+Medium outlines are registered as DVUI's normal face, without synthetic bold.
 
-The default install step copies the license next to the executable as
-`HarmonyOS-Sans-LICENSE.txt`.
+- Release: <https://github.com/lxgw/LxgwWenKai/releases/tag/v1.530>
+- Source commit: `4becfb4d5cf0c92cfdb60a6e9b504bda43315325`
+- Font: [`LXGWWenKai-Medium.ttf`](https://github.com/lxgw/LxgwWenKai/releases/download/v1.530/LXGWWenKai-Medium.ttf), embedded without modification
+- SHA-256: `f4b8a34d1f838fe411540cb7c97b1c384ac9738a876c4104500bc42508b2312a`, verified against the official release asset digest
+- License: SIL Open Font License 1.1; [`OFL.txt` at the pinned commit](https://github.com/lxgw/LxgwWenKai/blob/4becfb4d5cf0c92cfdb60a6e9b504bda43315325/OFL.txt), stored here as `LXGWWenKai-LICENSE.txt`
+
+The default install step and Windows ZIP include `LXGWWenKai-LICENSE.txt`.
 
 ## Noto Emoji
 

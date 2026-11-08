@@ -1,8 +1,11 @@
 const dvui = @import("dvui");
 
 pub const emoji_family = "Noto Emoji";
+const text_family = "LXGW WenKai";
 const embedded_fonts = [_]dvui.Font.Source{
-    .{ .family = dvui.Font.array("HarmonyOS Sans SC"), .bytes = @embedFile("harmonyos-sans-sc") },
+    // Use the original Medium outlines as the normal UI face. DVUI's weight
+    // enum only distinguishes normal/bold; no synthetic bold is needed here.
+    .{ .family = dvui.Font.array(text_family), .bytes = @embedFile("lxgw-wenkai-medium") },
     .{ .family = dvui.Font.array(emoji_family), .bytes = @embedFile("noto-emoji") },
 };
 
@@ -11,8 +14,8 @@ pub fn apply(win: *dvui.Window) void {
     theme.name = "Matterlog";
     theme.embedded_fonts = &embedded_fonts;
     const body_font = dvui.Font.find(.{
-        .family = "HarmonyOS Sans SC",
-        .size = 11,
+        .family = text_family,
+        .size = 12,
         .line_height_factor = 1.3,
     });
     theme.font_body = body_font;

@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $ManifestPath = Join-Path $PSScriptRoot 'build.zig.zon'
 $ReadmePath = Join-Path $PSScriptRoot 'packaging/windows/README.md'
 $ProjectLicensePath = Join-Path $PSScriptRoot 'LICENSE'
-$FontLicensePath = Join-Path $PSScriptRoot 'assets/fonts/LICENSE.txt'
+$FontLicensePath = Join-Path $PSScriptRoot 'assets/fonts/LXGWWenKai-LICENSE.txt'
 $EmojiLicensePath = Join-Path $PSScriptRoot 'assets/fonts/NotoEmoji-LICENSE.txt'
 foreach ($InputPath in @($ManifestPath, $ReadmePath, $ProjectLicensePath, $FontLicensePath, $EmojiLicensePath)) {
     if (-not (Test-Path -LiteralPath $InputPath -PathType Leaf)) {
@@ -45,7 +45,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $InstallDir 'bin/matterlog.exe') -Destination $PackageDir
     Copy-Item -LiteralPath $ReadmePath -Destination (Join-Path $PackageDir 'README.md')
     Copy-Item -LiteralPath $ProjectLicensePath -Destination (Join-Path $PackageDir 'LICENSE.txt')
-    Copy-Item -LiteralPath $FontLicensePath -Destination (Join-Path $PackageDir 'HarmonyOS-Sans-LICENSE.txt')
+    Copy-Item -LiteralPath $FontLicensePath -Destination (Join-Path $PackageDir 'LXGWWenKai-LICENSE.txt')
     Copy-Item -LiteralPath $EmojiLicensePath -Destination (Join-Path $PackageDir 'NotoEmoji-LICENSE.txt')
 
     Compress-Archive -LiteralPath $PackageDir -DestinationPath $StagedZip -CompressionLevel Optimal
