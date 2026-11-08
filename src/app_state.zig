@@ -1,5 +1,6 @@
 const std = @import("std");
 const database = @import("database.zig");
+const History = @import("text_history.zig").History;
 
 const title_capacity = 256;
 const entry_capacity = 16 * 1024;
@@ -20,6 +21,7 @@ pub const Notice = enum {
     entry_deleted,
     database_error,
     draft_unavailable,
+    history_unavailable,
 };
 
 pub const PendingAction = union(enum) {
@@ -56,6 +58,7 @@ pub const TaskFilter = enum {
 
 pub const Draft = struct {
     buffer: [entry_capacity]u8 = @splat(0),
+    history: History = .{},
 };
 
 pub const AppState = struct {
@@ -71,12 +74,12 @@ pub const AppState = struct {
     drafts: std.AutoHashMapUnmanaged(i64, Draft) = .empty,
     rename_buffer: [title_capacity]u8 = @splat(0),
     edit_buffer: [entry_capacity]u8 = @splat(0),
+    rename_history: History = .{},
+    edit_history: History = .{},
 
     mode: Mode = .none,
     scroll_to_latest: bool = false,
     focus_composer: bool = false,
-    composer_ime_active: bool = false,
-    edit_ime_active: bool = false,
     last_entry_click: ?EntryClick = null,
 
     notice: Notice = .none,
@@ -95,7 +98,11 @@ pub const AppState = struct {
     }
 
     pub fn deinit(self: *AppState, allocator: std.mem.Allocator) void {
+        var drafts = self.drafts.valueIterator();
+        while (drafts.next()) |item| item.history.clear();
         self.drafts.deinit(allocator);
+        self.rename_history.clear();
+        self.edit_history.clear();
         database.deinitTasks(allocator, &self.tasks);
         if (self.store) |*store| store.close();
         self.* = .{};
@@ -207,7 +214,7 @@ pub const AppState = struct {
     pub fn beginEntryEdit(self: *AppState, entry: *const database.Entry) void {
         self.cancelMode();
         setBuffer(self.edit_buffer[0..], entry.body);
-        self.edit_ime_active = false;
+        self.edit_history.clear();
         self.mode = .{ .edit_entry = entry.id };
     }
 
@@ -240,10 +247,13 @@ pub const AppState = struct {
 
     pub fn cancelMode(self: *AppState) void {
         switch (self.mode) {
-            .rename_task => clearBuffer(self.rename_buffer[0..]),
+            .rename_task => {
+                clearBuffer(self.rename_buffer[0..]);
+                self.rename_history.clear();
+            },
             .edit_entry => {
                 clearBuffer(self.edit_buffer[0..]);
-                self.edit_ime_active = false;
+                self.edit_history.clear();
             },
             .none,
             .confirm_delete_task,
@@ -283,6 +293,7 @@ pub const AppState = struct {
 
         self.mode = .none;
         clearBuffer(self.rename_buffer[0..]);
+        self.rename_history.clear();
         self.notice = .task_renamed;
     }
 
@@ -316,15 +327,18 @@ pub const AppState = struct {
         const preferred_id = self.replacementTaskId(task_id);
         try self.storePtr().deleteTask(task_id);
         try self.reloadData(allocator, preferred_id);
-        _ = self.drafts.remove(task_id);
+        if (self.drafts.fetchRemove(task_id)) |removed| {
+            var removed_draft = removed.value;
+            removed_draft.history.clear();
+        }
 
         self.mode = .none;
         clearBuffer(self.rename_buffer[0..]);
         clearBuffer(self.edit_buffer[0..]);
         self.scroll_to_latest = false;
         self.focus_composer = false;
-        self.composer_ime_active = false;
-        self.edit_ime_active = false;
+        self.rename_history.clear();
+        self.edit_history.clear();
         self.notice = .task_deleted;
     }
 
@@ -344,11 +358,11 @@ pub const AppState = struct {
         // The insert has committed. Clear only this task's draft, even if the
         // subsequent refresh fails, so retrying cannot submit it twice.
         clearBuffer(&task_draft.buffer);
+        task_draft.history.clear();
         try self.reloadData(allocator, task_id);
 
         self.scroll_to_latest = true;
         self.focus_composer = true;
-        self.composer_ime_active = false;
         self.notice = .entry_created;
     }
 
@@ -369,7 +383,7 @@ pub const AppState = struct {
 
         self.mode = .none;
         clearBuffer(self.edit_buffer[0..]);
-        self.edit_ime_active = false;
+        self.edit_history.clear();
         self.notice = .entry_updated;
     }
 
@@ -384,6 +398,7 @@ pub const AppState = struct {
 
         self.mode = .none;
         clearBuffer(self.edit_buffer[0..]);
+        self.edit_history.clear();
         self.notice = .entry_deleted;
     }
 
@@ -429,9 +444,11 @@ pub const AppState = struct {
 
     fn resetTaskInteraction(self: *AppState) void {
         self.cancelMode();
+        if (self.selected_task_id) |id| {
+            if (self.drafts.getPtr(id)) |item| item.history.cancelComposition(&item.buffer);
+        }
         self.scroll_to_latest = false;
         self.focus_composer = false;
-        self.composer_ime_active = false;
     }
 
     fn databaseFailure(self: *AppState, err: anyerror) void {
@@ -498,7 +515,7 @@ test "cancelMode clears only the active mode buffer" {
 
     setBuffer(app.edit_buffer[0..], "temporary edit");
     app.mode = .{ .edit_entry = 11 };
-    app.edit_ime_active = true;
+    app.edit_history.composing = true;
     app.last_entry_click = .{
         .entry_id = 11,
         .time_ns = 1,
@@ -508,7 +525,7 @@ test "cancelMode clears only the active mode buffer" {
     app.cancelMode();
 
     try std.testing.expectEqualStrings("", bufferText(app.edit_buffer[0..]));
-    try std.testing.expect(!app.edit_ime_active);
+    try std.testing.expect(!app.edit_history.composing);
     try std.testing.expectEqual(null, app.last_entry_click);
     try std.testing.expectEqualStrings("draft stays", bufferText(&app.draft().buffer));
 }
@@ -648,4 +665,69 @@ test "failed allocation leaves selection and existing draft intact" {
     }
     try app.selectTask(allocator, 1);
     try std.testing.expectEqualStrings("keep me", bufferText(&app.draft().buffer));
+}
+
+test "draft history survives task changes and failed saves but resets after submission" {
+    const allocator = std.testing.allocator;
+    var app: AppState = .{};
+    try app.init(allocator, ":memory:");
+    defer app.deinit(allocator);
+    try app.processCreateTask(allocator);
+    const a = app.selected_task_id.?;
+    setBuffer(&app.draft().buffer, "draft A");
+    try app.draft().history.record(allocator, .{ .text = "" }, .{ .text = "draft A" }, .isolated, 0);
+    try app.processCreateTask(allocator);
+    const b = app.selected_task_id.?;
+    try std.testing.expectEqual(null, app.draft().history.undo());
+    try app.selectTask(allocator, a);
+    try std.testing.expectEqualStrings("", app.draft().history.undo().?.text);
+    try std.testing.expectEqualStrings("draft A", app.draft().history.redo().?.text);
+
+    const c = @import("sqlite");
+    try std.testing.expectEqual(c.SQLITE_OK, c.sqlite3_exec(app.storePtr().handle, "PRAGMA query_only = ON", null, null, null));
+    try std.testing.expectError(error.DatabaseOperationFailed, app.processCreateEntry(allocator, a));
+    try std.testing.expect(app.draft().history.undo() != null);
+    _ = app.draft().history.redo();
+    try std.testing.expectEqual(c.SQLITE_OK, c.sqlite3_exec(app.storePtr().handle, "PRAGMA query_only = OFF", null, null, null));
+    try app.processCreateEntry(allocator, a);
+    try std.testing.expectEqual(null, app.draft().history.undo());
+    try app.selectTask(allocator, b);
+    try app.selectTask(allocator, a);
+    try std.testing.expectEqual(null, app.draft().history.redo());
+}
+
+test "edit and rename sessions reset their histories without clearing draft history" {
+    const allocator = std.testing.allocator;
+    var app: AppState = .{};
+    try app.init(allocator, ":memory:");
+    defer app.deinit(allocator);
+    try app.processCreateTask(allocator);
+    const id = app.selected_task_id.?;
+    setBuffer(&app.draft().buffer, "saved record");
+    try app.processCreateEntry(allocator, id);
+    const entry_id = app.selectedTask().?.entries.items[0].id;
+    setBuffer(&app.draft().buffer, "keep draft");
+    try app.draft().history.record(allocator, .{ .text = "" }, .{ .text = "keep draft" }, .isolated, 0);
+
+    app.beginEntryEdit(&app.selectedTask().?.entries.items[0]);
+    try app.edit_history.record(allocator, .{ .text = "saved record" }, .{ .text = "edited" }, .isolated, 0);
+    setBuffer(&app.edit_buffer, "edited");
+    app.cancelMode();
+    try std.testing.expectEqual(null, app.edit_history.undo());
+    try std.testing.expect(app.draft().history.undo() != null);
+    _ = app.draft().history.redo();
+    app.beginEntryEdit(&app.selectedTask().?.entries.items[0]);
+    try std.testing.expectEqualStrings("saved record", bufferText(&app.edit_buffer));
+    try app.edit_history.record(allocator, .{ .text = "saved record" }, .{ .text = "updated" }, .isolated, 0);
+    setBuffer(&app.edit_buffer, "updated");
+    try app.processUpdateEntry(allocator, entry_id);
+    try std.testing.expectEqual(null, app.edit_history.undo());
+    app.beginRename(app.selectedTask().?);
+    try app.rename_history.record(allocator, .{ .text = "新事项" }, .{ .text = "renamed" }, .isolated, 0);
+    setBuffer(&app.rename_buffer, "renamed");
+    try app.processRenameTask(allocator, id);
+    try std.testing.expectEqual(null, app.rename_history.undo());
+    try std.testing.expectEqualStrings("keep draft", bufferText(&app.draft().buffer));
+    try app.processDeleteTask(allocator, id);
+    try std.testing.expectEqual(@as(u32, 0), app.drafts.count());
 }
