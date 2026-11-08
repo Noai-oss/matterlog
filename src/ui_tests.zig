@@ -222,3 +222,46 @@ test "embedded emoji fallback and Chinese wrapping preserve original text and se
     try Harness.click("save-entry");
     try std.testing.expectEqualStrings(body, Harness.app.selectedTask().?.entries.items[0].body);
 }
+
+test "hints and feedback stay outside the composer at supported window sizes" {
+    for ([_]dvui.Size{ .{ .w = 760, .h = 520 }, .{ .w = 1100, .h = 760 } }) |size| {
+        for ([_]bool{ false, true }) |dark| {
+            var t = try dvui.testing.init(.{
+                .window_size = size,
+                .window_init_opts = .{ .color_scheme = if (dark) .dark else .light },
+                .image_dir = if (@import("test_options").snapshots) "release/ui-preview" else null,
+            });
+            defer t.deinit();
+            @import("theme.zig").apply(t.window);
+            try Harness.app.init(std.testing.allocator, ":memory:");
+            defer Harness.app.deinit(std.testing.allocator);
+            try dvui.testing.settle(Harness.frame);
+            try Harness.click("new-task");
+            try Harness.typeText("桌面工具体验改进");
+            try Harness.key(.enter, .none);
+            try Harness.click("composer");
+            try Harness.key(.enter, .lcontrol);
+            try std.testing.expectEqual(state.Notice.empty_entry, Harness.app.notice);
+            const hint = (try dvui.testing.tagGet("composer-hint")).rect;
+            const editor = (try dvui.testing.tagGet("composer")).rect;
+            const notice = (try dvui.testing.tagGet("notice")).rect;
+            const send = (try dvui.testing.tagGet("send-entry")).rect;
+            try std.testing.expect(hint.h > 0);
+            try std.testing.expect(hint.y + hint.h <= editor.y + 0.5);
+            try std.testing.expect(notice.y >= editor.y + editor.h);
+            try std.testing.expect(notice.y + notice.h <= t.window.rect_pixels.h);
+            try std.testing.expect(send.x >= editor.x + editor.w);
+            if (size.w == 760 and !dark) try t.saveImage(Harness.frame, null, "empty-entry-feedback.png");
+            try Harness.typeText("已完成 ✅\n草稿切换保留，支持撤销和重做。\n\n下一步\n检查中文输入、长文编辑与复制粘贴。测试反馈随时记录在这里。");
+            try Harness.key(.enter, .lcontrol);
+            try std.testing.expectEqual(state.Notice.entry_created, Harness.app.notice);
+            if (size.w == 1100) try t.saveImage(Harness.frame, null, if (dark) "overview-dark.png" else "overview-light.png");
+            if (size.w == 1100 and dark) {
+                try Harness.app.setTaskFilter(std.testing.allocator, .all);
+                Harness.app.pending = .{ .toggle_task_completed = Harness.app.selected_task_id.? };
+                try dvui.testing.settle(Harness.frame);
+                try t.saveImage(Harness.frame, null, "completed-dark.png");
+            }
+        }
+    }
+}

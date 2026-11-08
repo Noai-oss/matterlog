@@ -4,6 +4,8 @@ const database = @import("database.zig");
 const state = @import("app_state.zig");
 const text_editor = @import("text_editor.zig");
 const user_text = @import("user_text.zig");
+const theme = @import("theme.zig");
+const submit_key = if (@import("builtin").os.tag == .macos) "Cmd+Enter" else "Ctrl+Enter";
 
 const AppState = state.AppState;
 const TaskFilter = state.TaskFilter;
@@ -190,9 +192,9 @@ fn drawTaskFilterButton(
 fn drawTaskButton(app: *AppState, task: *const database.Task) void {
     const selected = app.selected_task_id != null and
         app.selected_task_id.? == task.id;
-    const theme = dvui.themeGet();
+    const colors = dvui.themeGet();
     const text_color: ?dvui.ColorOrGradient = if (task.completed)
-        .{ .color = theme.color(.app1, .text) }
+        .{ .color = colors.color(.app1, .text) }
     else
         null;
 
@@ -205,13 +207,13 @@ fn drawTaskButton(app: *AppState, task: *const database.Task) void {
             .expand = .horizontal,
             .style = .content,
             .border = .{ .x = 3 },
-            .color_fill = .{ .color = theme.fill },
-            .color_fill_hover = .{ .color = theme.color(.window, .fill) },
-            .color_fill_press = .{ .color = theme.color(.control, .fill) },
+            .color_fill = .{ .color = if (selected) colors.fill.lerp(colors.focus, 0.10) else colors.fill },
+            .color_fill_hover = .{ .color = colors.fill.lerp(colors.focus, 0.15) },
+            .color_fill_press = .{ .color = colors.fill.lerp(colors.focus, 0.22) },
             .color_text = text_color,
             .color_text_hover = text_color,
             .color_text_press = text_color,
-            .color_border = .{ .color = if (selected) theme.focus else theme.focus.opacity(0) },
+            .color_border = .{ .color = if (selected) colors.focus else colors.focus.opacity(0) },
             .margin = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
             .padding = .all(6),
             .id_extra = idExtra(task.id),
@@ -341,6 +343,7 @@ fn drawTaskHeader(app: *AppState, task: *const database.Task) void {
                 task.title,
                 .{
                     .font = .theme(.title),
+                    .background = false,
                     .expand = .horizontal,
                     .max_size_content = .width(0),
                     .gravity_y = 0.5,
@@ -475,10 +478,10 @@ fn drawTimeline(app: *AppState, task: *const database.Task) void {
             .expand = .both,
             // Entries scroll within the timeline and never push out the editor.
             .max_size_content = .height(0),
-            .background = true,
+            .background = false,
             .style = .content,
-            .border = .all(1),
-            .padding = .all(10),
+            .border = .all(0),
+            .padding = .all(4),
             .tag = if (@import("builtin").is_test) "timeline" else null,
         },
     );
@@ -508,10 +511,11 @@ fn drawEntryCard(
         .{
             .expand = .horizontal,
             .background = true,
-            .style = .control,
-            .border = .all(1),
-            .padding = .all(8),
-            .margin = .all(3),
+            .style = .content,
+            .border = .{ .h = 1 },
+            .corners = .round(6),
+            .padding = .all(10),
+            .margin = .{ .x = 3, .y = 3, .w = 3, .h = 8 },
             .id_extra = idExtra(entry.id),
         },
     );
@@ -530,18 +534,12 @@ fn drawEntryCard(
     user_text.addText(body, entry.body, .{});
     body.deinit();
 
-    var actions = dvui.box(
-        @src(),
-        .{ .dir = .horizontal },
-        .{ .expand = .horizontal },
-    );
-    defer actions.deinit();
-
     const metadata_options: dvui.Options = .{
-        .font = dvui.Font.theme(.body).withSize(9),
-        .color_text = .{ .color = dvui.themeGet().text.opacity(0.42) },
+        .font = dvui.Font.theme(.body).withSize(10),
+        .color_text = .{ .color = theme.mutedText() },
         .expand = .horizontal,
-        .gravity_y = 0.5,
+        .max_size_content = .width(0),
+        .margin = .{ .y = 7 },
     };
 
     if (!entry.edited) {
@@ -555,6 +553,13 @@ fn drawEntryCard(
         );
     }
 
+    var actions = dvui.box(
+        @src(),
+        .{ .dir = .horizontal },
+        .{ .gravity_x = 1, .margin = .{ .y = 2 } },
+    );
+    defer actions.deinit();
+
     const confirming_delete = app.isConfirmingEntryDeletion(entry.id);
 
     if (confirming_delete) {
@@ -566,18 +571,18 @@ fn drawEntryCard(
             dvui.refresh(null, @src(), null);
         }
     } else {
-        if (dvui.button(@src(), "复制", .{}, .{ .tag = if (@import("builtin").is_test) "copy-entry" else null })) {
+        if (dvui.button(@src(), "复制", .{}, entryActionOptions("copy-entry"))) {
             if (dvui.currentWindow().backend.clipboardTextSet(entry.body)) {
                 app.notice = .entry_copied;
             } else |_| {
                 app.notice = .clipboard_error;
             }
         }
-        if (dvui.button(@src(), "编辑", .{}, .{ .tag = if (@import("builtin").is_test) "edit-entry" else null })) {
+        if (dvui.button(@src(), "编辑", .{}, entryActionOptions("edit-entry"))) {
             app.beginEntryEdit(entry);
             dvui.refresh(null, @src(), null);
         }
-        if (dvui.button(@src(), "删除", .{}, .{ .margin = .{ .x = 4, .y = 4, .h = 4 } })) {
+        if (dvui.button(@src(), "删除", .{}, entryActionOptions("delete-entry"))) {
             app.requestEntryDeletion(entry.id);
             dvui.refresh(null, @src(), null);
         }
@@ -642,6 +647,8 @@ fn drawEntryEditor(app: *AppState, entry_id: i64, viewport_height: f32) void {
     );
     defer buttons.deinit();
 
+    drawHint(submit_key ++ " 保存 · Esc 取消", "edit-hint");
+
     const save_clicked = dvui.button(
         @src(),
         "保存修改",
@@ -664,10 +671,14 @@ fn drawEntryEditor(app: *AppState, entry_id: i64, viewport_height: f32) void {
 fn drawComposer(app: *AppState, task_id: i64) void {
     var composer = dvui.box(
         @src(),
-        .{ .dir = .horizontal },
+        .{ .dir = .vertical },
         .{ .expand = .both, .max_size_content = .zero, .margin = .{ .h = 4 } },
     );
     defer composer.deinit();
+
+    drawHint(submit_key ++ " 发送 · 拖动上方分隔条调整高度", "composer-hint");
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both, .max_size_content = .zero });
+    defer row.deinit();
 
     var editor: dvui.TextEntryWidget = undefined;
     editor.init(
@@ -710,6 +721,7 @@ fn drawComposer(app: *AppState, task_id: i64) void {
             .gravity_y = 1.0,
             .min_size_content = .{ .w = 70, .h = 34 },
             .margin = .{ .x = 4 },
+            .tag = if (@import("builtin").is_test) "send-entry" else null,
         },
     );
     if (edit_result.submit or send_clicked) {
@@ -719,12 +731,12 @@ fn drawComposer(app: *AppState, task_id: i64) void {
 
 fn drawNotice(app: *const AppState) void {
     const message: []const u8 = switch (app.notice) {
-        .none => "",
-        .confirm_delete_task => "删除事项会同时删除其中的所有进展。",
-        .confirm_delete_entry => "确定删除这条进展？",
+        .none => if (app.mode == .rename_task) "Enter 保存名称 · Esc 取消" else "",
+        .confirm_delete_task => "删除事项及全部进展？按 Esc 取消。",
+        .confirm_delete_entry => "确定删除这条进展？按 Esc 取消。",
         .empty_title => "事项名称不能为空。",
         .empty_entry => "进展内容不能为空。",
-        .task_created => "事项已创建，可以直接修改名称。",
+        .task_created => "事项已创建。Enter 保存名称 · Esc 取消。",
         .task_renamed => "事项名称已更新。",
         .task_completed => "事项已完成。",
         .task_reopened => "事项已重新打开。",
@@ -734,14 +746,13 @@ fn drawNotice(app: *const AppState) void {
         .entry_deleted => "进展已删除。",
         .entry_copied => "已复制整条进展。",
         .clipboard_error => "复制失败，请重试。",
-        .database_error => "数据库操作失败，请查看终端日志。",
+        .database_error => "数据操作未完成，请检查记录后重试。",
         .draft_unavailable => "无法打开该事项的输入区，当前草稿已保留。",
         .history_unavailable => "无法保留撤销历史，当前文字仍已保留。",
     };
 
-    const notice_font = dvui.Font.theme(.body).withSize(9).withLineHeight(1.0);
-    const color = switch (app.notice) {
-        .none => dvui.themeGet().text.opacity(0),
+    const notice_font = dvui.Font.theme(.body).withSize(10).withLineHeight(1.0);
+    const failed = switch (app.notice) {
         .confirm_delete_task,
         .confirm_delete_entry,
         .empty_title,
@@ -750,12 +761,18 @@ fn drawNotice(app: *const AppState) void {
         .draft_unavailable,
         .history_unavailable,
         .clipboard_error,
-        => dvui.themeGet().color(.err, .fill),
-        else => dvui.themeGet().focus,
+        => true,
+        else => false,
     };
+    const color = if (failed)
+        dvui.Color.fromHex(if (dvui.themeGet().dark) "#ffb4ab" else "#b42318")
+    else if (app.notice == .none)
+        theme.mutedText()
+    else
+        dvui.Color.fromHex(if (dvui.themeGet().dark) "#9ad7b0" else "#28613a");
 
     // Reserve one line even when empty so notices never shift the editor.
-    const notice_height = notice_font.textHeight();
+    const notice_height: f32 = 16;
     dvui.labelNoFmt(
         @src(),
         message,
@@ -763,13 +780,42 @@ fn drawNotice(app: *const AppState) void {
         .{
             .font = notice_font,
             .color_text = .{ .color = color },
+            .background = app.notice != .none,
+            .color_fill = .{ .color = dvui.themeGet().fill.lerp(color, 0.08) },
+            .color_border = .{ .color = color },
+            .border = .{ .x = if (app.notice != .none) 3 else 0 },
             .expand = .horizontal,
-            .padding = .{},
-            .margin = .{ .x = 4, .w = 4 },
+            .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
+            .margin = .{ .y = 2 },
             .min_size_content = .height(notice_height),
-            .max_size_content = .height(notice_height),
+            .max_size_content = .{ .w = 0, .h = notice_height },
+            .tag = if (@import("builtin").is_test) "notice" else null,
         },
     );
+}
+
+fn drawHint(message: []const u8, tag: []const u8) void {
+    dvui.labelNoFmt(@src(), message, .{}, .{
+        .font = dvui.Font.theme(.body).withSize(9),
+        .color_text = .{ .color = theme.mutedText() },
+        .expand = .horizontal,
+        .max_size_content = .width(0),
+        .padding = .{ .y = 3, .h = 3 },
+        .tag = if (@import("builtin").is_test) tag else null,
+    });
+}
+
+fn entryActionOptions(tag: []const u8) dvui.Options {
+    return .{
+        .font = dvui.Font.theme(.body).withSize(10),
+        .color_text = .{ .color = theme.mutedText() },
+        .color_fill = .{ .color = dvui.themeGet().fill },
+        .color_fill_hover = .{ .color = dvui.themeGet().focus.opacity(0.10) },
+        .color_fill_press = .{ .color = dvui.themeGet().focus.opacity(0.18) },
+        .padding = .{ .x = 7, .y = 4, .w = 7, .h = 4 },
+        .margin = .{ .x = 2 },
+        .tag = if (@import("builtin").is_test) tag else null,
+    };
 }
 
 fn idExtra(id: i64) usize {
