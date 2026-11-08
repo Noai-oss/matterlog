@@ -3,6 +3,20 @@ const dvui = @import("dvui");
 const history_module = @import("text_history.zig");
 const History = history_module.History;
 const Snapshot = history_module.Snapshot;
+const user_text = @import("user_text.zig");
+
+pub fn draw(editor: *dvui.TextEntryWidget) void {
+    if (editor.len == 0) {
+        editor.draw();
+        return;
+    }
+    editor.drawBeforeText();
+    if (dvui.accesskit_enabled) dvui.currentWindow().accesskit.text_run_parent = editor.data().id;
+    const opts = editor.data().options.strip();
+    user_text.addText(&editor.textLayout, editor.textGet(), opts);
+    editor.textLayout.addTextDone(opts);
+    editor.drawAfterText();
+}
 
 pub const Result = struct {
     submit: bool = false,

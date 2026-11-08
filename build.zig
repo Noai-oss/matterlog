@@ -41,9 +41,7 @@ pub fn build(b: *std.Build) !void {
         dvui_dep.module("sdl3"),
     );
     // 将 assets 中的文件提供给 @embedFile，资源仍在编译时嵌入程序。
-    module.addAnonymousImport("harmonyos-sans-sc", .{
-        .root_source_file = b.path("assets/fonts/HarmonyOS_Sans_SC.ttf"),
-    });
+    addFonts(b, module);
     module.addAnonymousImport("matterlog-icon", .{
         .root_source_file = b.path("assets/matterlog-icon.png"),
     });
@@ -77,6 +75,11 @@ pub fn build(b: *std.Build) !void {
 
     b.getInstallStep().dependOn(&install_executable.step);
     b.getInstallStep().dependOn(&install_font_license.step);
+    b.getInstallStep().dependOn(&b.addInstallFileWithDir(
+        b.path("assets/fonts/NotoEmoji-LICENSE.txt"),
+        .prefix,
+        "bin/NotoEmoji-LICENSE.txt",
+    ).step);
     b.getInstallStep().dependOn(&install_project_license.step);
 
     const run_command = b.addRunArtifact(executable);
@@ -127,7 +130,12 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    editor_test_module.addImport("dvui", dvui_testing.module("dvui_testing"));
+    const ui_snapshots = b.option(bool, "ui-snapshots", "Render UI tests with SDL and save preview PNGs") orelse false;
+    const test_options = b.addOptions();
+    test_options.addOption(bool, "snapshots", ui_snapshots);
+    editor_test_module.addOptions("test_options", test_options);
+    editor_test_module.addImport("dvui", if (ui_snapshots) dvui_dep.module("dvui_sdl3") else dvui_testing.module("dvui_testing"));
+    addFonts(b, editor_test_module);
     addSqlite(b, editor_test_module, sqlite.mod);
     const editor_tests = b.addTest(.{
         .name = "matterlog-editor-tests",
@@ -138,6 +146,11 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&run_database_tests.step);
     test_step.dependOn(&run_state_tests.step);
     test_step.dependOn(&b.addRunArtifact(editor_tests).step);
+}
+
+fn addFonts(b: *std.Build, module: *std.Build.Module) void {
+    module.addAnonymousImport("harmonyos-sans-sc", .{ .root_source_file = b.path("assets/fonts/HarmonyOS_Sans_SC.ttf") });
+    module.addAnonymousImport("noto-emoji", .{ .root_source_file = b.path("assets/fonts/NotoEmoji.ttf") });
 }
 
 fn addSqlite(b: *std.Build, module: *std.Build.Module, bindings: *std.Build.Module) void {

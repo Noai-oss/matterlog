@@ -22,3 +22,4 @@
 
 `LICENSE.txt` 是 Matterlog 的 MIT 许可证。
 `HarmonyOS-Sans-LICENSE.txt` 是随程序分发的字体许可证。
+`NotoEmoji-LICENSE.txt` 是随程序分发的 Emoji 字体许可证。

@@ -3,6 +3,7 @@ const dvui = @import("dvui");
 const database = @import("database.zig");
 const state = @import("app_state.zig");
 const text_editor = @import("text_editor.zig");
+const user_text = @import("user_text.zig");
 
 const AppState = state.AppState;
 const TaskFilter = state.TaskFilter;
@@ -195,9 +196,9 @@ fn drawTaskButton(app: *AppState, task: *const database.Task) void {
     else
         null;
 
-    if (dvui.button(
+    var button: dvui.ButtonWidget = undefined;
+    button.init(
         @src(),
-        task.title,
         .{ .draw_focus = false },
         .{
             .tab_index = 0,
@@ -215,8 +216,19 @@ fn drawTaskButton(app: *AppState, task: *const database.Task) void {
             .padding = .all(6),
             .id_extra = idExtra(task.id),
             .tag = if (@import("builtin").is_test) task.title else null,
+            .label = .{ .text = task.title },
         },
-    )) {
+    );
+    button.processEvents();
+    button.drawBackground();
+    user_text.label(@src(), task.title, button.data().options.strip().override(button.style()).override(.{
+        .expand = .horizontal,
+        .gravity_y = 0.5,
+    }));
+    button.drawFocus();
+    const clicked = button.clicked();
+    button.deinit();
+    if (clicked) {
         app.selectTask(dvui.currentWindow().gpa, task.id) catch {
             app.notice = .draft_unavailable;
         };
@@ -324,10 +336,9 @@ fn drawTaskHeader(app: *AppState, task: *const database.Task) void {
             );
             defer title_row.deinit();
 
-            dvui.labelNoFmt(
+            user_text.label(
                 @src(),
                 task.title,
-                .{},
                 .{
                     .font = .theme(.title),
                     .expand = .horizontal,
@@ -431,7 +442,7 @@ fn drawRenameEditor(app: *AppState, task_id: i64) void {
 
     const edit_result = text_editor.process(&editor, &app.rename_history, false);
     if (edit_result.history_failed) app.notice = .history_unavailable;
-    editor.draw();
+    text_editor.draw(&editor);
     const enter_pressed = editor.enter_pressed;
     editor.deinit();
 
@@ -516,7 +527,7 @@ fn drawEntryCard(
         .{ .break_lines = true, .cache_layout = true },
         .{ .expand = .horizontal, .background = false, .tag = if (@import("builtin").is_test) "entry-body" else null },
     );
-    body.addText(entry.body, .{});
+    user_text.addText(body, entry.body, .{});
     body.deinit();
 
     var actions = dvui.box(
@@ -614,7 +625,7 @@ fn drawEntryEditor(app: *AppState, entry_id: i64, viewport_height: f32) void {
 
     const edit_result = text_editor.process(&editor, &app.edit_history, true);
     if (edit_result.history_failed) app.notice = .history_unavailable;
-    editor.draw();
+    text_editor.draw(&editor);
     app.edit_content_height = editor.textLayout.data().min_size.h + 4;
     const resizing = @abs(std.math.clamp(app.edit_content_height, minimum_height, maximum_height) - height) > 0.5;
     if (resizing) {
@@ -687,7 +698,7 @@ fn drawComposer(app: *AppState, task_id: i64) void {
 
     const edit_result = text_editor.process(&editor, &app.draft().history, true);
     if (edit_result.history_failed) app.notice = .history_unavailable;
-    editor.draw();
+    text_editor.draw(&editor);
     editor.deinit();
 
     const send_clicked = dvui.button(

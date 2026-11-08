@@ -3,6 +3,19 @@ const dvui = @import("dvui");
 const state = @import("app_state.zig");
 const ui = @import("ui.zig");
 
+fn expectClipboard(expected: []const u8) !void {
+    // SDL uses native Windows CRLF on the system clipboard. The testing
+    // backend keeps LF; neither form may add/remove any other characters.
+    const actual = dvui.clipboardText();
+    var normalized: std.ArrayList(u8) = .empty;
+    defer normalized.deinit(std.testing.allocator);
+    for (actual, 0..) |byte, i| {
+        if (byte == '\r' and i + 1 < actual.len and actual[i + 1] == '\n') continue;
+        try normalized.append(std.testing.allocator, byte);
+    }
+    try std.testing.expectEqualStrings(expected, normalized.items);
+}
+
 const Harness = struct {
     var app: state.AppState = .{};
 
@@ -36,6 +49,7 @@ const Harness = struct {
 test "full UI preserves task draft undo and resets saved and cancelled edit sessions" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 1100, .h = 760 } });
     defer t.deinit();
+    @import("theme.zig").apply(t.window);
     try Harness.app.init(std.testing.allocator, ":memory:");
     defer Harness.app.deinit(std.testing.allocator);
     try dvui.testing.settle(Harness.frame);
@@ -94,6 +108,7 @@ test "long entry editor grows with wrapped content and keeps save visible in sma
     for ([_]dvui.Size{ .{ .w = 1100, .h = 760 }, .{ .w = 760, .h = 520 } }) |size| {
         var t = try dvui.testing.init(.{ .window_size = size });
         defer t.deinit();
+        @import("theme.zig").apply(t.window);
         try Harness.app.init(std.testing.allocator, ":memory:");
         defer Harness.app.deinit(std.testing.allocator);
         try dvui.testing.settle(Harness.frame);
@@ -131,6 +146,7 @@ test "long entry editor grows with wrapped content and keeps save visible in sma
 test "double click selects text and explicit copy preserves the complete record" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 1100, .h = 760 } });
     defer t.deinit();
+    @import("theme.zig").apply(t.window);
     try Harness.app.init(std.testing.allocator, ":memory:");
     defer Harness.app.deinit(std.testing.allocator);
     try dvui.testing.settle(Harness.frame);
@@ -150,9 +166,59 @@ test "double click selects text and explicit copy preserves the complete record"
     try Harness.key(.c, .lcontrol);
     try std.testing.expectEqualStrings("alpha", dvui.clipboardText());
     try Harness.click("copy-entry");
-    try std.testing.expectEqualStrings(body, dvui.clipboardText());
+    try expectClipboard(body);
     try std.testing.expectEqual(state.Notice.entry_copied, Harness.app.notice);
     try Harness.click("edit-entry");
     try std.testing.expect(Harness.app.hasActiveMode());
     try std.testing.expectEqualStrings(body, std.mem.sliceTo(&Harness.app.edit_buffer, 0));
+}
+
+test "embedded emoji fallback and Chinese wrapping preserve original text and selection" {
+    var t = try dvui.testing.init(.{
+        .window_size = .{ .w = 760, .h = 520 },
+        .image_dir = if (@import("test_options").snapshots) "release/ui-preview" else null,
+    });
+    defer t.deinit();
+    const theme = @import("theme.zig");
+    const user_text = @import("user_text.zig");
+    theme.apply(t.window);
+    const fallback = dvui.Font.theme(.body).withFamily(theme.emoji_family);
+    for ([_]u21{ '✅', '🙂', '🚀' }) |cp| {
+        try std.testing.expect(user_text.hasGlyph(fallback, cp));
+    }
+    try Harness.app.init(std.testing.allocator, ":memory:");
+    defer Harness.app.deinit(std.testing.allocator);
+    try dvui.testing.settle(Harness.frame);
+    try Harness.click("new-task");
+    try Harness.typeText("本周进展 🚀");
+    try Harness.key(.enter, .none);
+    try Harness.click("composer");
+    const body = "7. 这是一段用于检查中文折行的进展记录，序号后面应该继续显示正文，不能在空格处提前折行。继续输入更多中文，检查窄窗口中的自动换行。\n\n完成 ✅  心情 🙂  发布 🚀\nEnglish words and C:\\Work\\notes.txt";
+    try Harness.typeText(body);
+    try Harness.key(.home, .lcontrol);
+    try Harness.key(.end, .lshift);
+    try Harness.key(.c, .lcontrol);
+    const first_line = dvui.clipboardText();
+    try std.testing.expect(std.mem.startsWith(u8, first_line, "7. 这"));
+    try std.testing.expect(first_line.len < body.len);
+    try Harness.key(.a, .lcontrol);
+    try Harness.key(.c, .lcontrol);
+    try expectClipboard(body);
+    try Harness.typeText("替换");
+    try Harness.key(.z, .lcontrol);
+    try std.testing.expectEqualStrings(body, Harness.draftText());
+    try Harness.key(.enter, .lcontrol);
+    try t.saveImage(Harness.frame, null, "unicode-record.png");
+    try Harness.click("entry-body");
+    try Harness.key(.a, .lcontrol);
+    try Harness.key(.c, .lcontrol);
+    try expectClipboard(body);
+    try Harness.click("edit-entry");
+    try Harness.key(.a, .lcontrol);
+    try Harness.key(.c, .lcontrol);
+    try expectClipboard(body);
+    try Harness.key(.right, .none);
+    try t.saveImage(Harness.frame, null, "unicode-editor.png");
+    try Harness.click("save-entry");
+    try std.testing.expectEqualStrings(body, Harness.app.selectedTask().?.entries.items[0].body);
 }
