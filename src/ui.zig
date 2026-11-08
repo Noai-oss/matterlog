@@ -514,17 +514,10 @@ fn drawEntryCard(
     var body = dvui.textLayout(
         @src(),
         .{ .break_lines = true, .cache_layout = true },
-        .{ .expand = .horizontal, .background = false },
+        .{ .expand = .horizontal, .background = false, .tag = if (@import("builtin").is_test) "entry-body" else null },
     );
     body.addText(entry.body, .{});
-    const edit_double_clicked = entryBodyDoubleClicked(app, body, entry.id);
     body.deinit();
-
-    if (edit_double_clicked) {
-        app.beginEntryEdit(entry);
-        dvui.refresh(null, @src(), null);
-        return;
-    }
 
     var actions = dvui.box(
         @src(),
@@ -562,7 +555,14 @@ fn drawEntryCard(
             dvui.refresh(null, @src(), null);
         }
     } else {
-        if (dvui.button(@src(), "编辑", .{}, .{})) {
+        if (dvui.button(@src(), "复制", .{}, .{ .tag = if (@import("builtin").is_test) "copy-entry" else null })) {
+            if (dvui.currentWindow().backend.clipboardTextSet(entry.body)) {
+                app.notice = .entry_copied;
+            } else |_| {
+                app.notice = .clipboard_error;
+            }
+        }
+        if (dvui.button(@src(), "编辑", .{}, .{ .tag = if (@import("builtin").is_test) "edit-entry" else null })) {
             app.beginEntryEdit(entry);
             dvui.refresh(null, @src(), null);
         }
@@ -706,38 +706,6 @@ fn drawComposer(app: *AppState, task_id: i64) void {
     }
 }
 
-fn entryBodyDoubleClicked(
-    app: *AppState,
-    body: *dvui.TextLayoutWidget,
-    entry_id: i64,
-) bool {
-    const click_event = body.click_event orelse return false;
-    if (click_event != .mouse or click_event.mouse.button != .left) return false;
-
-    const point = click_event.mouse.p;
-    const now = dvui.frameTimeNS();
-    const is_double_click = if (app.last_entry_click) |last| blk: {
-        const distance = point.diff(.{ .x = last.x, .y = last.y }).toNatural();
-        break :blk last.entry_id == entry_id and
-            now >= last.time_ns and
-            now - last.time_ns <= 500_000_000 and
-            @abs(distance.x) <= dvui.Dragging.threshold and
-            @abs(distance.y) <= dvui.Dragging.threshold;
-    } else false;
-
-    if (is_double_click) {
-        app.last_entry_click = null;
-    } else {
-        app.last_entry_click = .{
-            .entry_id = entry_id,
-            .time_ns = now,
-            .x = point.x,
-            .y = point.y,
-        };
-    }
-    return is_double_click;
-}
-
 fn drawNotice(app: *const AppState) void {
     const message: []const u8 = switch (app.notice) {
         .none => "",
@@ -753,6 +721,8 @@ fn drawNotice(app: *const AppState) void {
         .entry_created => "进展已发送。",
         .entry_updated => "进展已修改。",
         .entry_deleted => "进展已删除。",
+        .entry_copied => "已复制整条进展。",
+        .clipboard_error => "复制失败，请重试。",
         .database_error => "数据库操作失败，请查看终端日志。",
         .draft_unavailable => "无法打开该事项的输入区，当前草稿已保留。",
         .history_unavailable => "无法保留撤销历史，当前文字仍已保留。",
@@ -768,6 +738,7 @@ fn drawNotice(app: *const AppState) void {
         .database_error,
         .draft_unavailable,
         .history_unavailable,
+        .clipboard_error,
         => dvui.themeGet().color(.err, .fill),
         else => dvui.themeGet().focus,
     };
