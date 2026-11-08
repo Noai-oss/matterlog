@@ -283,12 +283,13 @@ fn drawDetailContent(app: *AppState, task: *const database.Task) void {
     // may collapse, and a small window must not overwrite the preferred height.
     const available = @max(1, panes.data().contentRect().h - handle_size);
     const minimum_height = @min(100, available / 2);
-    const minimum_ratio = minimum_height / available;
-    split_ratio = 1 - std.math.clamp(app.composer_height, minimum_height, available - minimum_height) / available;
+    const timeline_minimum = if (app.mode == .edit_entry) @min(180, available / 2) else minimum_height;
+    const minimum_ratio = timeline_minimum / available;
+    split_ratio = 1 - std.math.clamp(app.composer_height, minimum_height, available - timeline_minimum) / available;
     const previous_ratio = split_ratio;
     panes.processEvents();
     const dragged = split_ratio != previous_ratio;
-    split_ratio = std.math.clamp(split_ratio, minimum_ratio, 1 - minimum_ratio);
+    split_ratio = std.math.clamp(split_ratio, minimum_ratio, 1 - minimum_height / available);
     if (dragged) {
         app.composer_height = available * (1 - split_ratio);
     }
@@ -467,6 +468,7 @@ fn drawTimeline(app: *AppState, task: *const database.Task) void {
             .style = .content,
             .border = .all(1),
             .padding = .all(10),
+            .tag = if (@import("builtin").is_test) "timeline" else null,
         },
     );
     defer timeline.deinit();
@@ -479,7 +481,7 @@ fn drawTimeline(app: *AppState, task: *const database.Task) void {
 
     for (task.entries.items, 0..) |*entry, index| {
         const scroll_here = app.scroll_to_latest and index + 1 == task.entries.items.len;
-        drawEntryCard(app, entry, scroll_here);
+        drawEntryCard(app, entry, scroll_here, timeline.si.viewport.h);
     }
 }
 
@@ -487,6 +489,7 @@ fn drawEntryCard(
     app: *AppState,
     entry: *const database.Entry,
     scroll_here: bool,
+    viewport_height: f32,
 ) void {
     var card = dvui.box(
         @src(),
@@ -504,7 +507,7 @@ fn drawEntryCard(
     defer card.deinit();
 
     if (app.isEditingEntry(entry.id)) {
-        drawEntryEditor(app, entry.id);
+        drawEntryEditor(app, entry.id, viewport_height);
         return;
     }
 
@@ -578,7 +581,13 @@ fn drawEntryCard(
     }
 }
 
-fn drawEntryEditor(app: *AppState, entry_id: i64) void {
+fn drawEntryEditor(app: *AppState, entry_id: i64, viewport_height: f32) void {
+    // Reserve the card insets and action row inside the timeline viewport.
+    // Actual wrapped text height comes from TextLayout, so resizing, pasting,
+    // deleting and undo all use the same measurement as the rendered text.
+    const maximum_height = @max(24, @min(360, viewport_height - 94));
+    const minimum_height = @min(92, maximum_height);
+    const height = std.math.clamp(app.edit_content_height, minimum_height, maximum_height);
     var editor: dvui.TextEntryWidget = undefined;
     editor.init(
         @src(),
@@ -591,9 +600,9 @@ fn drawEntryEditor(app: *AppState, entry_id: i64) void {
         },
         .{
             .expand = .horizontal,
-            .min_size_content = .{ .h = 92 },
+            .min_size_content = .{ .h = height },
             .tag = if (@import("builtin").is_test) "entry-editor" else null,
-            .max_size_content = dvui.Options.MaxSize.height(92),
+            .max_size_content = dvui.Options.MaxSize.height(height),
             .margin = .{ .y = 4, .h = 4 },
         },
     );
@@ -606,6 +615,13 @@ fn drawEntryEditor(app: *AppState, entry_id: i64) void {
     const edit_result = text_editor.process(&editor, &app.edit_history, true);
     if (edit_result.history_failed) app.notice = .history_unavailable;
     editor.draw();
+    app.edit_content_height = editor.textLayout.data().min_size.h + 4;
+    const resizing = @abs(std.math.clamp(app.edit_content_height, minimum_height, maximum_height) - height) > 0.5;
+    if (resizing) {
+        app.reveal_entry_editor = true;
+        dvui.refresh(null, @src(), editor.data().id);
+    }
+    const first_frame = dvui.firstFrame(editor.data().id);
     editor.deinit();
 
     var buttons = dvui.box(
@@ -619,7 +635,7 @@ fn drawEntryEditor(app: *AppState, entry_id: i64) void {
         @src(),
         "保存修改",
         .{},
-        .{ .style = .highlight },
+        .{ .style = .highlight, .tag = if (@import("builtin").is_test) "save-entry" else null },
     );
     if (edit_result.submit or save_clicked) {
         app.pending = .{ .update_entry = entry_id };
@@ -627,6 +643,10 @@ fn drawEntryEditor(app: *AppState, entry_id: i64) void {
     if (dvui.button(@src(), "取消", .{}, .{ .margin = .{ .x = 4, .y = 4, .h = 4 } })) {
         app.cancelMode();
         dvui.refresh(null, @src(), null);
+    }
+    if (app.reveal_entry_editor and !first_frame and !resizing) {
+        dvui.scrollTo(.{ .screen_rect = buttons.data().borderRectScale().r });
+        app.reveal_entry_editor = false;
     }
 }
 

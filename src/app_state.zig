@@ -76,6 +76,8 @@ pub const AppState = struct {
     edit_buffer: [entry_capacity]u8 = @splat(0),
     rename_history: History = .{},
     edit_history: History = .{},
+    edit_content_height: f32 = 92,
+    reveal_entry_editor: bool = false,
 
     mode: Mode = .none,
     scroll_to_latest: bool = false,
@@ -215,6 +217,8 @@ pub const AppState = struct {
         self.cancelMode();
         setBuffer(self.edit_buffer[0..], entry.body);
         self.edit_history.clear();
+        self.edit_content_height = 92;
+        self.reveal_entry_editor = true;
         self.mode = .{ .edit_entry = entry.id };
     }
 

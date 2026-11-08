@@ -89,3 +89,41 @@ test "full UI preserves task draft undo and resets saved and cancelled edit sess
     try Harness.click("Task B");
     try std.testing.expectEqualStrings("B draft", Harness.draftText());
 }
+
+test "long entry editor grows with wrapped content and keeps save visible in small windows" {
+    for ([_]dvui.Size{ .{ .w = 1100, .h = 760 }, .{ .w = 760, .h = 520 } }) |size| {
+        var t = try dvui.testing.init(.{ .window_size = size });
+        defer t.deinit();
+        try Harness.app.init(std.testing.allocator, ":memory:");
+        defer Harness.app.deinit(std.testing.allocator);
+        try dvui.testing.settle(Harness.frame);
+        try Harness.click("new-task");
+        try Harness.key(.escape, .none);
+        try Harness.click("composer");
+        const body = comptime blk: {
+            var text: []const u8 = "";
+            for (0..60) |_| text = text ++ "Long paragraph that wraps across the available width, keeping every word intact. ";
+            break :blk text;
+        };
+        const saved_body = std.mem.trim(u8, body, " \t\r\n");
+        try Harness.typeText(body);
+        try Harness.key(.enter, .lcontrol);
+        Harness.app.beginEntryEdit(&Harness.app.selectedTask().?.entries.items[0]);
+        try dvui.testing.settle(Harness.frame);
+        const expanded = (try dvui.testing.tagGet("entry-editor")).rect;
+        const timeline = (try dvui.testing.tagGet("timeline")).rect;
+        const save = (try dvui.testing.tagGet("save-entry")).rect;
+        try std.testing.expect(expanded.h > 92 * t.window.natural_scale);
+        try std.testing.expect(save.y >= timeline.y);
+        try std.testing.expect(save.y + save.h <= timeline.y + timeline.h);
+        try Harness.key(.a, .lcontrol);
+        try Harness.typeText("short");
+        const compact = (try dvui.testing.tagGet("entry-editor")).rect;
+        try std.testing.expect(compact.h < expanded.h);
+        try Harness.key(.z, .lcontrol);
+        try std.testing.expectEqualStrings(saved_body, std.mem.sliceTo(&Harness.app.edit_buffer, 0));
+        try std.testing.expect((try dvui.testing.tagGet("entry-editor")).rect.h > compact.h);
+        try Harness.click("save-entry");
+        try std.testing.expectEqualStrings(saved_body, Harness.app.selectedTask().?.entries.items[0].body);
+    }
+}
