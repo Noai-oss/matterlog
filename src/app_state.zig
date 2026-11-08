@@ -19,6 +19,8 @@ pub const Notice = enum {
     entry_created,
     entry_updated,
     entry_deleted,
+    entry_copied,
+    clipboard_error,
     database_error,
     draft_unavailable,
     history_unavailable,
@@ -41,13 +43,6 @@ pub const Mode = union(enum) {
     edit_entry: i64,
     confirm_delete_task: i64,
     confirm_delete_entry: i64,
-};
-
-pub const EntryClick = struct {
-    entry_id: i64,
-    time_ns: i128,
-    x: f32,
-    y: f32,
 };
 
 pub const TaskFilter = enum {
@@ -82,7 +77,6 @@ pub const AppState = struct {
     mode: Mode = .none,
     scroll_to_latest: bool = false,
     focus_composer: bool = false,
-    last_entry_click: ?EntryClick = null,
 
     notice: Notice = .none,
     pending: PendingAction = .none,
@@ -265,7 +259,6 @@ pub const AppState = struct {
             => {},
         }
         self.mode = .none;
-        self.last_entry_click = null;
         self.notice = .none;
     }
 
@@ -520,17 +513,10 @@ test "cancelMode clears only the active mode buffer" {
     setBuffer(app.edit_buffer[0..], "temporary edit");
     app.mode = .{ .edit_entry = 11 };
     app.edit_history.composing = true;
-    app.last_entry_click = .{
-        .entry_id = 11,
-        .time_ns = 1,
-        .x = 2,
-        .y = 3,
-    };
     app.cancelMode();
 
     try std.testing.expectEqualStrings("", bufferText(app.edit_buffer[0..]));
     try std.testing.expect(!app.edit_history.composing);
-    try std.testing.expectEqual(null, app.last_entry_click);
     try std.testing.expectEqualStrings("draft stays", bufferText(&app.draft().buffer));
 }
 

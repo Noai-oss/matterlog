@@ -127,3 +127,32 @@ test "long entry editor grows with wrapped content and keeps save visible in sma
         try std.testing.expectEqualStrings(saved_body, Harness.app.selectedTask().?.entries.items[0].body);
     }
 }
+
+test "double click selects text and explicit copy preserves the complete record" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 1100, .h = 760 } });
+    defer t.deinit();
+    try Harness.app.init(std.testing.allocator, ":memory:");
+    defer Harness.app.deinit(std.testing.allocator);
+    try dvui.testing.settle(Harness.frame);
+    try Harness.click("new-task");
+    try Harness.key(.escape, .none);
+    try Harness.click("composer");
+    const body = "alpha beta gamma\n\n中文 ✅ https://example.com/path";
+    try Harness.typeText(body);
+    try Harness.key(.enter, .lcontrol);
+    const rect = (try dvui.testing.tagGet("entry-body")).rect;
+    _ = try t.window.addEventMouseMotion(.{ .pt = .{ .x = rect.x + 10, .y = rect.y + 10 } });
+    try dvui.testing.click(.left);
+    try dvui.testing.settle(Harness.frame);
+    try dvui.testing.click(.left);
+    try dvui.testing.settle(Harness.frame);
+    try std.testing.expect(!Harness.app.hasActiveMode());
+    try Harness.key(.c, .lcontrol);
+    try std.testing.expectEqualStrings("alpha", dvui.clipboardText());
+    try Harness.click("copy-entry");
+    try std.testing.expectEqualStrings(body, dvui.clipboardText());
+    try std.testing.expectEqual(state.Notice.entry_copied, Harness.app.notice);
+    try Harness.click("edit-entry");
+    try std.testing.expect(Harness.app.hasActiveMode());
+    try std.testing.expectEqualStrings(body, std.mem.sliceTo(&Harness.app.edit_buffer, 0));
+}
