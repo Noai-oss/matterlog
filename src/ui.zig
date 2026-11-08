@@ -529,8 +529,12 @@ fn drawEntryCard(
     var body = dvui.textLayout(
         @src(),
         .{ .break_lines = true, .cache_layout = true },
-        .{ .expand = .horizontal, .background = false, .tag = if (@import("builtin").is_test) "entry-body" else null },
+        .{ .expand = .horizontal, .background = false, .tag = entryTestTag("entry-body", entry.id) },
     );
+    // TextLayout retains its selection across frames, including after losing focus.
+    if (dvui.focusedWidgetId() != body.data().id) {
+        body.selection.moveCursor(body.selection.cursor, false);
+    }
     user_text.addText(body, entry.body, .{});
     body.deinit();
 
@@ -571,18 +575,18 @@ fn drawEntryCard(
             dvui.refresh(null, @src(), null);
         }
     } else {
-        if (dvui.button(@src(), "复制", .{}, entryActionOptions("copy-entry"))) {
+        if (dvui.button(@src(), "复制", .{}, entryActionOptions(entryTestTag("copy-entry", entry.id)))) {
             if (dvui.currentWindow().backend.clipboardTextSet(entry.body)) {
                 app.notice = .entry_copied;
             } else |_| {
                 app.notice = .clipboard_error;
             }
         }
-        if (dvui.button(@src(), "编辑", .{}, entryActionOptions("edit-entry"))) {
+        if (dvui.button(@src(), "编辑", .{}, entryActionOptions(entryTestTag("edit-entry", entry.id)))) {
             app.beginEntryEdit(entry);
             dvui.refresh(null, @src(), null);
         }
-        if (dvui.button(@src(), "删除", .{}, entryActionOptions("delete-entry"))) {
+        if (dvui.button(@src(), "删除", .{}, entryActionOptions(entryTestTag("delete-entry", entry.id)))) {
             app.requestEntryDeletion(entry.id);
             dvui.refresh(null, @src(), null);
         }
@@ -805,7 +809,12 @@ fn drawHint(message: []const u8, tag: []const u8) void {
     });
 }
 
-fn entryActionOptions(tag: []const u8) dvui.Options {
+fn entryTestTag(comptime prefix: []const u8, entry_id: i64) ?[]const u8 {
+    if (!@import("builtin").is_test) return null;
+    return std.fmt.allocPrint(dvui.currentWindow().arena(), prefix ++ "-{d}", .{entry_id}) catch unreachable;
+}
+
+fn entryActionOptions(tag: ?[]const u8) dvui.Options {
     return .{
         .font = dvui.Font.theme(.body).withSize(11),
         .color_text = .{ .color = theme.mutedText() },

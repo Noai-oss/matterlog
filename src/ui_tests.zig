@@ -16,6 +16,13 @@ fn expectClipboard(expected: []const u8) !void {
     try std.testing.expectEqualStrings(expected, normalized.items);
 }
 
+fn bodyHasSelection(tag: []const u8) !bool {
+    const id = (try dvui.testing.tagGet(tag)).id;
+    // Observe DVUI's actual persisted selection, not an application mirror.
+    const selection = dvui.dataGet(null, id, "_selection", dvui.TextLayoutWidget.Selection) orelse return error.SelectionNotFound;
+    return selection.start != selection.end;
+}
+
 const Harness = struct {
     var app: state.AppState = .{};
 
@@ -43,6 +50,10 @@ const Harness = struct {
 
     fn draftText() []const u8 {
         return std.mem.sliceTo(&app.draft().buffer, 0);
+    }
+
+    fn entryTag(comptime prefix: []const u8, index: usize) ![]const u8 {
+        return std.fmt.allocPrint(dvui.currentWindow().arena(), prefix ++ "-{d}", .{app.selectedTask().?.entries.items[index].id});
     }
 };
 
@@ -156,7 +167,7 @@ test "double click selects text and explicit copy preserves the complete record"
     const body = "alpha beta gamma\n\n中文 ✅ https://example.com/path";
     try Harness.typeText(body);
     try Harness.key(.enter, .lcontrol);
-    const rect = (try dvui.testing.tagGet("entry-body")).rect;
+    const rect = (try dvui.testing.tagGet(try Harness.entryTag("entry-body", 0))).rect;
     _ = try t.window.addEventMouseMotion(.{ .pt = .{ .x = rect.x + 10, .y = rect.y + 10 } });
     try dvui.testing.click(.left);
     try dvui.testing.settle(Harness.frame);
@@ -165,12 +176,95 @@ test "double click selects text and explicit copy preserves the complete record"
     try std.testing.expect(!Harness.app.hasActiveMode());
     try Harness.key(.c, .lcontrol);
     try std.testing.expectEqualStrings("alpha", dvui.clipboardText());
-    try Harness.click("copy-entry");
+    try Harness.click(try Harness.entryTag("copy-entry", 0));
     try expectClipboard(body);
     try std.testing.expectEqual(state.Notice.entry_copied, Harness.app.notice);
-    try Harness.click("edit-entry");
+    try Harness.click(try Harness.entryTag("edit-entry", 0));
     try std.testing.expect(Harness.app.hasActiveMode());
     try std.testing.expectEqualStrings(body, std.mem.sliceTo(&Harness.app.edit_buffer, 0));
+}
+
+test "record selection clears on focus changes but survives dragging and copying" {
+    var t = try dvui.testing.init(.{
+        .window_size = .{ .w = 1100, .h = 760 },
+        .image_dir = if (@import("test_options").snapshots) "release/ui-preview" else null,
+    });
+    defer t.deinit();
+    @import("theme.zig").apply(t.window);
+    try Harness.app.init(std.testing.allocator, ":memory:");
+    defer Harness.app.deinit(std.testing.allocator);
+    try dvui.testing.settle(Harness.frame);
+    try Harness.click("new-task");
+    try Harness.typeText("选区切换检查");
+    try Harness.key(.enter, .none);
+    const first = "alpha first record\n第一条进展 ✅";
+    const second = "beta second record\n第二条进展 🚀";
+    for ([_][]const u8{ first, second }) |body| {
+        try Harness.click("composer");
+        try Harness.typeText(body);
+        try Harness.key(.enter, .lcontrol);
+    }
+    const entries = Harness.app.selectedTask().?.entries.items;
+    var first_tag_buffer: [64]u8 = undefined;
+    var second_tag_buffer: [64]u8 = undefined;
+    const first_tag = try std.fmt.bufPrint(&first_tag_buffer, "entry-body-{d}", .{entries[0].id});
+    const second_tag = try std.fmt.bufPrint(&second_tag_buffer, "entry-body-{d}", .{entries[1].id});
+    try Harness.click(first_tag);
+    try Harness.key(.a, .lcontrol);
+    try std.testing.expect(try bodyHasSelection(first_tag));
+    try Harness.key(.c, .lcontrol);
+    try expectClipboard(first);
+    try std.testing.expect(try bodyHasSelection(first_tag));
+
+    // Later-drawn and earlier-drawn records must both lose their old selection.
+    try Harness.click(second_tag);
+    try Harness.key(.a, .lcontrol);
+    try t.saveImage(Harness.frame, null, "record-selection-focused.png");
+    try std.testing.expect(!try bodyHasSelection(first_tag));
+    try std.testing.expect(try bodyHasSelection(second_tag));
+    try Harness.key(.c, .lcontrol);
+    try expectClipboard(second);
+    try dvui.testing.moveTo(first_tag);
+    try dvui.testing.settle(Harness.frame);
+    try std.testing.expect(try bodyHasSelection(second_tag));
+    try Harness.click(first_tag);
+    try std.testing.expect(!try bodyHasSelection(second_tag));
+    try Harness.key(.a, .lcontrol);
+    try Harness.click("composer");
+    try std.testing.expect(!try bodyHasSelection(first_tag));
+
+    // Clicking a card's padding must clear the previous text selection too.
+    try Harness.click(first_tag);
+    try Harness.key(.a, .lcontrol);
+    const second_rect = (try dvui.testing.tagGet(second_tag)).rect;
+    const scale = t.window.natural_scale;
+    _ = try t.window.addEventMouseMotion(.{ .pt = .{ .x = second_rect.x - 4 * scale, .y = second_rect.y + 10 * scale } });
+    try dvui.testing.click(.left);
+    try dvui.testing.settle(Harness.frame);
+    try std.testing.expect(!try bodyHasSelection(first_tag));
+
+    // Explicit whole-record copy still works and clears the inactive body.
+    try Harness.click(first_tag);
+    try Harness.key(.a, .lcontrol);
+    try Harness.click(try Harness.entryTag("copy-entry", 1));
+    try expectClipboard(second);
+    try std.testing.expect(!try bodyHasSelection(first_tag));
+
+    // A captured drag can end outside the body without acting like a new click.
+    const first_rect = (try dvui.testing.tagGet(first_tag)).rect;
+    _ = try t.window.addEventMouseMotion(.{ .pt = .{ .x = first_rect.x + 10 * scale, .y = first_rect.y + 10 * scale } });
+    _ = try t.window.addEventMouseButton(.left, .press);
+    try dvui.testing.settle(Harness.frame);
+    _ = try t.window.addEventMouseMotion(.{ .pt = .{ .x = first_rect.x + 100 * scale, .y = first_rect.y + 10 * scale } });
+    try dvui.testing.settle(Harness.frame);
+    try std.testing.expect(try bodyHasSelection(first_tag));
+    try dvui.testing.moveTo(second_tag);
+    try dvui.testing.settle(Harness.frame);
+    _ = try t.window.addEventMouseButton(.left, .release);
+    try dvui.testing.settle(Harness.frame);
+    try std.testing.expect(try bodyHasSelection(first_tag));
+    try Harness.click(second_tag);
+    try std.testing.expect(!try bodyHasSelection(first_tag));
 }
 
 test "embedded emoji fallback and Chinese wrapping preserve original text and selection" {
@@ -209,11 +303,11 @@ test "embedded emoji fallback and Chinese wrapping preserve original text and se
     try std.testing.expectEqualStrings(body, Harness.draftText());
     try Harness.key(.enter, .lcontrol);
     try t.saveImage(Harness.frame, null, "unicode-record.png");
-    try Harness.click("entry-body");
+    try Harness.click(try Harness.entryTag("entry-body", 0));
     try Harness.key(.a, .lcontrol);
     try Harness.key(.c, .lcontrol);
     try expectClipboard(body);
-    try Harness.click("edit-entry");
+    try Harness.click(try Harness.entryTag("edit-entry", 0));
     try Harness.key(.a, .lcontrol);
     try Harness.key(.c, .lcontrol);
     try expectClipboard(body);
