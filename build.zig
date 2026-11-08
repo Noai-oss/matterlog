@@ -63,9 +63,9 @@ pub fn build(b: *std.Build) !void {
         .{},
     );
     const install_font_license = b.addInstallFileWithDir(
-        b.path("assets/fonts/LICENSE.txt"),
+        b.path("assets/fonts/LXGWWenKai-LICENSE.txt"),
         .prefix,
-        "bin/HarmonyOS-Sans-LICENSE.txt",
+        "bin/LXGWWenKai-LICENSE.txt",
     );
     const install_project_license = b.addInstallFileWithDir(
         b.path("LICENSE"),
@@ -149,7 +149,7 @@ pub fn build(b: *std.Build) !void {
 }
 
 fn addFonts(b: *std.Build, module: *std.Build.Module) void {
-    module.addAnonymousImport("harmonyos-sans-sc", .{ .root_source_file = b.path("assets/fonts/HarmonyOS_Sans_SC.ttf") });
+    module.addAnonymousImport("lxgw-wenkai-medium", .{ .root_source_file = b.path("assets/fonts/LXGWWenKai-Medium.ttf") });
     module.addAnonymousImport("noto-emoji", .{ .root_source_file = b.path("assets/fonts/NotoEmoji.ttf") });
 }
 

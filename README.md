@@ -17,7 +17,7 @@ Matterlog 是一个使用 Zig、DVUI 和 SQLite 编写的本地事项进展记�
 - DVUI 0.6.0-dev（`main@4189669`，由 `build.zig.zon` 锁定）
 - translate-c 2.0.0（用于生成 C 绑定，由 `build.zig.zon` 锁定）
 - SQLite 3.53.4（源码已放在 `vendor/sqlite`）
-- 字体：HarmonyOS Sans SC、Noto Emoji（许可文件随构建产物安装）
+- 字体：霞鹜文楷 Medium、Noto Emoji（许可文件随构建产物安装）
 
 首次构建需要联网下载 DVUI、translate-c 及其依赖，之后可以使用本地 Zig 缓存。
 
@@ -69,14 +69,15 @@ Matterlog 使用 [MIT License](LICENSE)。
 ## 源码结构
 
 ```text
-src/main.zig                        DVUI/SDL 应用入口与主题
+src/main.zig                        DVUI/SDL 应用入口
+src/theme.zig                       字体与配色
 src/app_state.zig                   应用状态与业务动作
 src/ui.zig                          界面布局与交互
 src/tray.zig                        Windows 系统托盘与关闭隐藏
 src/single_instance.zig             Windows 单实例与重复启动唤起
 src/database.zig                    SQLite 数据访问
 assets/                             PNG/ICO 图标、Windows 资源定义与 README 截图
-assets/fonts/                       HarmonyOS Sans SC 与字体许可证
+assets/fonts/                       霞鹜文楷、Noto Emoji 与字体许可证
 vendor/sqlite/                      SQLite amalgamation、版本与哈希
 packaging/windows/README.md         包内静态使用说明
 release/                           本地 ZIP 等生成产物（Git 忽略）
