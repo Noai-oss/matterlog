@@ -188,7 +188,7 @@ test "zoom keeps composer and saved entry actions reachable in a small window" {
     try Harness.typeText("中文进展第一行，检查不同缩放比例下的换行和按钮。\n第二行\n第三行\n第四行\n第五行\n第六行\n第七行\n第八行\n第九行\n第十行");
     try Harness.key(.enter, .lcontrol);
     try Harness.click(try Harness.entryTag("edit-entry", 0));
-    for ([_]u16{ 80, 100, 120, 150 }) |percent| {
+    for ([_]u16{ 80, 90, 100, 110, 120, 130, 140, 150 }) |percent| {
         Harness.app.zoom_percent = percent;
         try dvui.testing.settle(Harness.frame);
         for ([_][]const u8{ "composer", "send-entry", "save-entry", "zoom-reset" }) |tag| {
@@ -198,6 +198,12 @@ test "zoom keeps composer and saved entry actions reachable in a small window" {
             try std.testing.expect(data.rect.x + data.rect.w <= t.window.rect_pixels.w + 1);
             try std.testing.expect(data.rect.y + data.rect.h <= t.window.rect_pixels.h + 1);
         }
+        for ([_][]const u8{ "filter-active", "filter-completed", "filter-all" }, [_][]const u8{ "进行中", "已完成", "全部" }) |tag, label| {
+            const data = try dvui.testing.tagGet(tag);
+            const width = (dvui.Font.theme(.body).textSize(label).w + 16) * t.window.natural_scale;
+            try std.testing.expect(data.rect.w + 1 >= width);
+        }
+        if (percent == 110) try t.saveImage(Harness.frame, null, "zoom-small-110.png");
     }
     try t.saveImage(Harness.frame, null, "zoom-small-150.png");
     try Harness.click("save-entry");

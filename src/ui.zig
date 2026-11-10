@@ -142,9 +142,12 @@ fn drawSidebarHeader(app: *AppState) void {
 }
 
 fn drawTaskFilters(app: *AppState) void {
+    const font = dvui.Font.theme(.body);
+    // Each button needs its text plus horizontal padding, margins and border.
+    const required_width = font.textSize("进行中").w + font.textSize("已完成").w + font.textSize("全部").w + 3 * 16;
     var row = dvui.box(
         @src(),
-        .{ .dir = if (dvui.parentGet().data().contentRect().w < 170) .vertical else .horizontal },
+        .{ .dir = if (dvui.parentGet().data().contentRect().w < required_width) .vertical else .horizontal },
         .{
             .expand = .horizontal,
             .margin = .{ .y = 4, .h = 6 },
@@ -182,6 +185,11 @@ fn drawTaskFilterButton(
             .padding = .{ .x = 5, .y = 4, .w = 5, .h = 4 },
             .margin = .{ .x = 2, .w = 2 },
             .id_extra = @backingInt(filter) + 1,
+            .tag = if (@import("builtin").is_test) switch (filter) {
+                .active => "filter-active",
+                .completed => "filter-completed",
+                .all => "filter-all",
+            } else null,
         },
     )) {
         app.setTaskFilter(dvui.currentWindow().gpa, filter) catch {
