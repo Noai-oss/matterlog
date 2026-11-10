@@ -764,6 +764,7 @@ fn drawNotice(app: *const AppState) void {
         .database_error => "数据操作未完成，请检查记录后重试。",
         .draft_unavailable => "无法打开该事项的输入区，当前草稿已保留。",
         .history_unavailable => "无法保留撤销历史，当前文字仍已保留。",
+        .preferences_unavailable => "缩放偏好读写失败，本次仍可调整和记录。",
     };
 
     const notice_font = dvui.Font.theme(.body).withSize(11).withLineHeight(1.0);
@@ -776,6 +777,7 @@ fn drawNotice(app: *const AppState) void {
         .draft_unavailable,
         .history_unavailable,
         .clipboard_error,
+        .preferences_unavailable,
         => true,
         else => false,
     };

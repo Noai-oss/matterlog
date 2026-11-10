@@ -210,6 +210,23 @@ test "zoom keeps composer and saved entry actions reachable in a small window" {
     try std.testing.expect(!Harness.app.hasActiveMode());
 }
 
+test "persisted zoom is the user factor and reset preserves system DPI" {
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 1100, .h = 760 } });
+    defer t.deinit();
+    @import("theme.zig").apply(t.window);
+    try Harness.app.init(std.testing.allocator, ":memory:");
+    defer Harness.app.deinit(std.testing.allocator);
+    try dvui.testing.settle(Harness.frame);
+    const system_scale = t.window.natural_scale;
+    Harness.app.zoom_percent = 150;
+    try dvui.testing.settle(Harness.frame);
+    try std.testing.expectEqual(@as(?i64, 150), try Harness.app.store.?.loadZoomPercent());
+    try std.testing.expectApproxEqAbs(system_scale * 1.5, t.window.natural_scale, 0.02);
+    try Harness.key(.zero, .lcontrol);
+    try std.testing.expectEqual(@as(?i64, 100), try Harness.app.store.?.loadZoomPercent());
+    try std.testing.expectApproxEqAbs(system_scale, t.window.natural_scale, 0.02);
+}
+
 test "full UI preserves task draft undo and resets saved and cancelled edit sessions" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 1100, .h = 760 } });
     defer t.deinit();

@@ -84,6 +84,29 @@ pub const Database = struct {
         self.* = undefined;
     }
 
+    // Preferences are optional: AppState can keep recording with default
+    // zoom even if this table cannot be read or written.
+    pub fn loadZoomPercent(self: *Database) !?i64 {
+        try self.exec("CREATE TABLE IF NOT EXISTS preferences (key TEXT PRIMARY KEY, value INTEGER NOT NULL);");
+        const statement = try self.prepare("SELECT value FROM preferences WHERE key = 'ui_zoom_percent';");
+        defer _ = c.sqlite3_finalize(statement);
+        const result = c.sqlite3_step(statement);
+        if (result == c.SQLITE_DONE) return null;
+        if (result != c.SQLITE_ROW) return Error.DatabaseOperationFailed;
+        if (c.sqlite3_column_type(statement, 0) != c.SQLITE_INTEGER) return null;
+        return c.sqlite3_column_int64(statement, 0);
+    }
+
+    pub fn saveZoomPercent(self: *Database, percent: u16) !void {
+        const statement = try self.prepare(
+            "INSERT INTO preferences(key, value) VALUES ('ui_zoom_percent', ?) " ++
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
+        );
+        defer _ = c.sqlite3_finalize(statement);
+        try bindInt64(statement, 1, percent);
+        try expectDone(c.sqlite3_step(statement));
+    }
+
     fn initialize(self: *Database) !void {
         try self.exec("PRAGMA foreign_keys = ON;");
         try self.exec("PRAGMA journal_mode = DELETE;");

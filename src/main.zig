@@ -71,6 +71,8 @@ pub fn appInit(win: *dvui.Window) !void {
     const database_path = try databasePath(win.gpa);
     defer win.gpa.free(database_path);
     try app.init(win.gpa, database_path);
+    // Restore only the user's factor; Window.begin applies system DPI separately.
+    win.content_scale = @import("zoom.zig").scale(app.zoom_percent);
 
     tray.init(win.backend.impl.window) catch |err| {
         std.log.warn("System tray unavailable ({s}): {s}", .{ @errorName(err), sdl_backend.c.SDL_GetError() });
