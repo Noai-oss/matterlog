@@ -59,6 +59,7 @@ fn appStart() dvui.App.StartOptions {
         .org = app_organization,
         .app = app_name,
         .persist_window_geometry = false,
+        .window_init_options = .{ .keybinds_zoom = false },
         .icon = if (builtin.os.tag == .windows) null else app_icon_bytes,
         .hidden = builtin.os.tag == .windows,
     };

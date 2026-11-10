@@ -55,7 +55,154 @@ const Harness = struct {
     fn entryTag(comptime prefix: []const u8, index: usize) ![]const u8 {
         return std.fmt.allocPrint(dvui.currentWindow().arena(), prefix ++ "-{d}", .{app.selectedTask().?.entries.items[index].id});
     }
+
+    fn checkZoomKeys() !void {
+        const focus = dvui.focusedWidgetId();
+        const win = dvui.currentWindow();
+        try key(.equal, .lcontrol);
+        try std.testing.expectApproxEqAbs(@as(f32, 1.1), win.content_scale, 0.001);
+        try key(.kp_add, .lcontrol);
+        try std.testing.expectApproxEqAbs(@as(f32, 1.2), win.content_scale, 0.001);
+        try key(.minus, .lcontrol);
+        try key(.kp_subtract, .lcontrol);
+        try std.testing.expectEqual(@as(f32, 1), win.content_scale);
+        var ctrl_shift: dvui.enums.Mod = .lcontrol;
+        ctrl_shift.combine(.lshift);
+        try key(.equal, ctrl_shift);
+        try std.testing.expectApproxEqAbs(@as(f32, 1.1), win.content_scale, 0.001);
+        try key(.zero, .lcontrol);
+        var altgr: dvui.enums.Mod = .lcontrol;
+        altgr.combine(.lalt);
+        try key(.equal, altgr);
+        try std.testing.expectEqual(@as(f32, 1), win.content_scale);
+        for (0..20) |_| _ = try win.addEventKey(.{ .code = .kp_add, .mod = .lcontrol, .action = .repeat });
+        try dvui.testing.settle(frame);
+        try key(.equal, .lcontrol);
+        try std.testing.expectEqual(@as(f32, 1.5), win.content_scale);
+        for (0..20) |_| _ = try win.addEventKey(.{ .code = .minus, .mod = .lcontrol, .action = .repeat });
+        try dvui.testing.settle(frame);
+        try std.testing.expectApproxEqAbs(@as(f32, 0.8), win.content_scale, 0.001);
+        try key(.kp_0, .lcontrol);
+        try std.testing.expectEqual(@as(f32, 1), win.content_scale);
+        try std.testing.expectEqual(focus, dvui.focusedWidgetId());
+    }
 };
+
+test "zoom shortcuts work with each editor focused without changing text selection or undo" {
+    // Enable DVUI's fallback as well: handled keys must never scale twice.
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 1100, .h = 760 }, .window_init_opts = .{ .keybinds_zoom = true } });
+    defer t.deinit();
+    @import("theme.zig").apply(t.window);
+    try Harness.app.init(std.testing.allocator, ":memory:");
+    defer Harness.app.deinit(std.testing.allocator);
+    try dvui.testing.settle(Harness.frame);
+    try Harness.checkZoomKeys();
+    try Harness.click("new-task");
+    try Harness.typeText("缩放测试");
+    try Harness.checkZoomKeys();
+    try std.testing.expectEqualStrings("缩放测试", std.mem.sliceTo(&Harness.app.rename_buffer, 0));
+    try Harness.key(.enter, .none);
+    try Harness.click("composer");
+    const text = "中文 + = - 0\n第二行 ✅";
+    try Harness.typeText(text);
+    try Harness.key(.a, .lcontrol);
+    try Harness.checkZoomKeys();
+    try Harness.key(.c, .lcontrol);
+    try expectClipboard(text);
+    try std.testing.expectEqualStrings(text, Harness.draftText());
+    try Harness.key(.z, .lcontrol);
+    try std.testing.expectEqualStrings("", Harness.draftText());
+    try Harness.key(.y, .lcontrol);
+    try Harness.key(.enter, .lcontrol);
+    try Harness.click(try Harness.entryTag("edit-entry", 0));
+    try Harness.key(.a, .lcontrol);
+    try Harness.checkZoomKeys();
+    try Harness.key(.c, .lcontrol);
+    try expectClipboard(text);
+    try Harness.typeText("已编辑");
+    try Harness.key(.z, .lcontrol);
+    try std.testing.expectEqualStrings(text, std.mem.sliceTo(&Harness.app.edit_buffer, 0));
+    try Harness.key(.escape, .none);
+    try std.testing.expectEqualStrings(text, Harness.app.selectedTask().?.entries.items[0].body);
+
+    try Harness.click("zoom-in");
+    try std.testing.expectApproxEqAbs(@as(f32, 1.1), t.window.content_scale, 0.001);
+    try Harness.click("zoom-reset");
+    try std.testing.expectEqual(@as(f32, 1), t.window.content_scale);
+    try Harness.click("zoom-out");
+    try std.testing.expectApproxEqAbs(@as(f32, 0.9), t.window.content_scale, 0.001);
+
+    try Harness.click("composer");
+    try Harness.typeText("前缀 ");
+    _ = try t.window.addEventText(.{ .text = "zhong", .selected = true });
+    try dvui.testing.settle(Harness.frame);
+    try Harness.key(.equal, .lcontrol);
+    try std.testing.expect(Harness.app.draft().history.composing);
+    try std.testing.expectEqualStrings("前缀 zhong", Harness.draftText());
+    try Harness.typeText("中文");
+    try Harness.key(.z, .lcontrol);
+    try std.testing.expectEqualStrings("前缀 ", Harness.draftText());
+}
+
+test "SDL keyboard mapping reaches global zoom while typing" {
+    if (comptime !@import("test_options").snapshots) return error.SkipZigTest;
+    var t = try dvui.testing.init(.{ .window_size = .{ .w = 1100, .h = 760 } });
+    defer t.deinit();
+    @import("theme.zig").apply(t.window);
+    try Harness.app.init(std.testing.allocator, ":memory:");
+    defer Harness.app.deinit(std.testing.allocator);
+    try dvui.testing.settle(Harness.frame);
+    try Harness.click("new-task");
+    try Harness.key(.enter, .none);
+    try Harness.click("composer");
+    try Harness.typeText("原文保持不变");
+    const c = dvui.backend.c;
+    for ([_]c.SDL_Keycode{ c.SDLK_EQUALS, c.SDLK_KP_PLUS, c.SDLK_MINUS, c.SDLK_KP_MINUS, c.SDLK_0 }, [_]u16{ 110, 120, 110, 100, 100 }) |code, expected| {
+        var event = std.mem.zeroes(c.SDL_Event);
+        event.key.type = c.SDL_EVENT_KEY_DOWN;
+        event.key.key = code;
+        event.key.mod = c.SDL_KMOD_LCTRL;
+        _ = try t.backend.addEvent(t.window, event);
+        event.key.type = c.SDL_EVENT_KEY_UP;
+        _ = try t.backend.addEvent(t.window, event);
+        try dvui.testing.settle(Harness.frame);
+        try std.testing.expectEqual(expected, Harness.app.zoom_percent);
+        try std.testing.expectEqualStrings("原文保持不变", Harness.draftText());
+    }
+}
+
+test "zoom keeps composer and saved entry actions reachable in a small window" {
+    var t = try dvui.testing.init(.{
+        .window_size = .{ .w = 760, .h = 520 },
+        .image_dir = if (@import("test_options").snapshots) "release/ui-preview" else null,
+    });
+    defer t.deinit();
+    @import("theme.zig").apply(t.window);
+    try Harness.app.init(std.testing.allocator, ":memory:");
+    defer Harness.app.deinit(std.testing.allocator);
+    try dvui.testing.settle(Harness.frame);
+    try Harness.click("new-task");
+    try Harness.typeText("缩放后的长文编辑");
+    try Harness.key(.enter, .none);
+    try Harness.click("composer");
+    try Harness.typeText("中文进展第一行，检查不同缩放比例下的换行和按钮。\n第二行\n第三行\n第四行\n第五行\n第六行\n第七行\n第八行\n第九行\n第十行");
+    try Harness.key(.enter, .lcontrol);
+    try Harness.click(try Harness.entryTag("edit-entry", 0));
+    for ([_]u16{ 80, 100, 120, 150 }) |percent| {
+        Harness.app.zoom_percent = percent;
+        try dvui.testing.settle(Harness.frame);
+        for ([_][]const u8{ "composer", "send-entry", "save-entry", "zoom-reset" }) |tag| {
+            const data = try dvui.testing.tagGet(tag);
+            try std.testing.expect(data.visible);
+            try std.testing.expect(data.rect.x >= 0 and data.rect.y >= 0);
+            try std.testing.expect(data.rect.x + data.rect.w <= t.window.rect_pixels.w + 1);
+            try std.testing.expect(data.rect.y + data.rect.h <= t.window.rect_pixels.h + 1);
+        }
+    }
+    try t.saveImage(Harness.frame, null, "zoom-small-150.png");
+    try Harness.click("save-entry");
+    try std.testing.expect(!Harness.app.hasActiveMode());
+}
 
 test "full UI preserves task draft undo and resets saved and cancelled edit sessions" {
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 1100, .h = 760 } });

@@ -5,6 +5,7 @@ const state = @import("app_state.zig");
 const text_editor = @import("text_editor.zig");
 const user_text = @import("user_text.zig");
 const theme = @import("theme.zig");
+const zoom_controls = @import("zoom_controls.zig");
 const submit_key = if (@import("builtin").os.tag == .macos) "Cmd+Enter" else "Ctrl+Enter";
 
 const AppState = state.AppState;
@@ -15,6 +16,7 @@ const header_secondary_button_width: f32 = 40;
 const HeaderControlPosition = enum { middle, trailing };
 
 pub fn draw(app: *AppState) void {
+    zoom_controls.process(&app.zoom_percent);
     var root = dvui.box(
         @src(),
         .{ .dir = .vertical },
@@ -28,6 +30,7 @@ pub fn draw(app: *AppState) void {
 
     processEscapeShortcut(app, root.data());
     drawMainPanes(app);
+    zoom_controls.draw(&app.zoom_percent);
 }
 
 fn processEscapeShortcut(app: *AppState, root_data: *dvui.WidgetData) void {
@@ -141,7 +144,7 @@ fn drawSidebarHeader(app: *AppState) void {
 fn drawTaskFilters(app: *AppState) void {
     var row = dvui.box(
         @src(),
-        .{ .dir = .horizontal },
+        .{ .dir = if (dvui.parentGet().data().contentRect().w < 170) .vertical else .horizontal },
         .{
             .expand = .horizontal,
             .margin = .{ .y = 4, .h = 6 },
