@@ -561,6 +561,81 @@ test "embedded emoji fallback and Chinese wrapping preserve original text and se
     try std.testing.expectEqualStrings(body, Harness.app.selectedTask().?.entries.items[0].body);
 }
 
+test "sidebar title ellipsis fits mixed font runs and keeps the full stored name" {
+    const user_text = @import("user_text.zig");
+    const Probe = struct {
+        fn frame() !dvui.App.Result {
+            const font = dvui.Font.theme(.body);
+            for ([_][]const u8{ "本周项目进展与下一步安排", "发布 🚀 检查 ✅ 记录 🙂", "AV weekly progress", "🚀🚀🚀" }, 0..) |title, i| {
+                for ([_]f32{ 0, 3, 12, 20, 37, 60, 100, 400 }, 0..) |width, j| {
+                    var layout: dvui.TextLayoutWidget = undefined;
+                    layout.init(@src(), .{ .break_lines = false, .focused = false }, .{
+                        .rect = .{ .w = width, .h = 30 },
+                        .id_extra = i * 10 + j,
+                        .font = font,
+                    });
+                    defer layout.deinit();
+                    const fitted = user_text.fitLabel(title, font, width);
+                    try std.testing.expect(std.unicode.utf8ValidateSlice(fitted));
+                    if (width == 400) try std.testing.expectEqualStrings(title, fitted);
+                    if (!std.mem.eql(u8, title, fitted) and fitted.len > 0) {
+                        try std.testing.expect(std.mem.endsWith(u8, fitted, "…"));
+                        try std.testing.expect(std.mem.startsWith(u8, title, fitted[0 .. fitted.len - "…".len]));
+                    }
+                    user_text.addText(&layout, fitted, .{});
+                    layout.addTextDone(.{});
+                    // Check the actual fallback renderer, not just the fitting measurement.
+                    try std.testing.expect(layout.insert_pt.x <= width + 0.01);
+                }
+            }
+            return .ok;
+        }
+    };
+
+    var t = try dvui.testing.init(.{
+        .window_size = .{ .w = 760, .h = 520 },
+        .image_dir = if (@import("test_options").snapshots) "release/ui-preview" else null,
+    });
+    defer t.deinit();
+    @import("theme.zig").apply(t.window);
+    for ([_]f32{ 0.8, 1, 1.5 }) |scale| {
+        t.window.content_scale = scale;
+        _ = try dvui.testing.step(Probe.frame);
+        _ = try dvui.testing.step(Probe.frame);
+    }
+    t.window.content_scale = 1;
+    try Harness.app.init(std.testing.allocator, ":memory:");
+    defer Harness.app.deinit(std.testing.allocator);
+    try dvui.testing.settle(Harness.frame);
+    try Harness.click("new-task");
+    const title = "本周进展 🚀 记录与检查";
+    try Harness.typeText(title);
+    try Harness.key(.enter, .none);
+    try Harness.click("composer");
+    try Harness.typeText("草稿保留");
+    for ([_]u16{ 80, 100, 150 }) |percent| {
+        Harness.app.zoom_percent = percent;
+        Harness.app.sidebar_ratio = 0.18;
+        try dvui.testing.settle(Harness.frame);
+        const title_tag = try std.fmt.allocPrint(t.window.arena(), "task-title-{d}", .{Harness.app.selected_task_id.?});
+        const narrow = (try dvui.testing.tagGet(title_tag)).rect;
+        try std.testing.expect(narrow.x + narrow.w <= t.window.rect_pixels.w * 0.3);
+        try Harness.click(title);
+        try std.testing.expectEqualStrings(title, Harness.app.selectedTask().?.title);
+        try std.testing.expectEqualStrings("草稿保留", Harness.draftText());
+        if (percent == 100) try t.saveImage(Harness.frame, null, "sidebar-title-narrow.png");
+    }
+    Harness.app.zoom_percent = 100;
+    Harness.app.sidebar_ratio = 0.5;
+    try dvui.testing.settle(Harness.frame);
+    try std.testing.expectEqualStrings(title, Harness.app.selectedTask().?.title);
+    Harness.app.beginRename(Harness.app.selectedTask().?);
+    try dvui.testing.settle(Harness.frame);
+    try std.testing.expectEqualStrings(title, std.mem.sliceTo(&Harness.app.rename_buffer, 0));
+    try Harness.key(.escape, .none);
+    try t.saveImage(Harness.frame, null, "sidebar-title-wide.png");
+}
+
 test "hints and feedback stay outside the composer at supported window sizes" {
     for ([_]dvui.Size{ .{ .w = 760, .h = 520 }, .{ .w = 1100, .h = 760 } }) |size| {
         for ([_]bool{ false, true }) |dark| {
