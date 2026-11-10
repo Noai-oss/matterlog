@@ -6,16 +6,37 @@ const Snapshot = history_module.Snapshot;
 const user_text = @import("user_text.zig");
 
 pub fn draw(editor: *dvui.TextEntryWidget) void {
-    if (editor.len == 0) {
-        editor.draw();
-        return;
-    }
     editor.drawBeforeText();
     if (dvui.accesskit_enabled) dvui.currentWindow().accesskit.text_run_parent = editor.data().id;
     const opts = editor.data().options.strip();
     user_text.addText(&editor.textLayout, editor.textGet(), opts);
     editor.textLayout.addTextDone(opts);
+    if (editor.len == 0) drawPlaceholder(editor, opts);
     editor.drawAfterText();
+}
+
+fn drawPlaceholder(editor: *dvui.TextEntryWidget, opts: dvui.Options) void {
+    const placeholder = editor.init_opts.placeholder orelse return;
+    if (editor.data().accesskit_node()) |node| {
+        dvui.AccessKit.nodeSetPlaceholderWithLength(node, placeholder.ptr, placeholder.len);
+    }
+
+    // Placeholder text is decoration, not editable content. Sharing the editor's
+    // layout makes a click position the caret within the hint for one frame,
+    // before TextEntry clamps the byte offset back to zero.
+    if (dvui.accesskit_enabled) dvui.currentWindow().accesskit.text_run_parent = null;
+    var hint: dvui.TextLayoutWidget = undefined;
+    hint.init(@src(), .{
+        .break_lines = editor.init_opts.break_lines,
+        .focused = false,
+        .process_events_in_deinit = false,
+    }, opts.override(.{
+        .rect = editor.textLayout.data().contentRect().justSize(),
+        .color_text = editor.textLayout.data().options.color(.text).opacity(0.65),
+        .role = .none,
+    }));
+    defer hint.deinit();
+    user_text.addText(&hint, placeholder, .{});
 }
 
 pub const Result = struct {
