@@ -88,6 +88,80 @@ const Harness = struct {
     }
 };
 
+test "empty editor caret starts at the origin on the very first click frame" {
+    const Editor = struct {
+        var buffer: [1024]u8 = @splat(0);
+        var history: @import("text_history.zig").History = .{};
+        var cursor: dvui.Rect = .{};
+        var selection: dvui.TextLayoutWidget.Selection = .{};
+        var multiline = false;
+
+        fn frame() !dvui.App.Result {
+            var editor: dvui.TextEntryWidget = undefined;
+            editor.init(@src(), .{
+                .text = .{ .buffer = &buffer },
+                .multiline = multiline,
+                .break_lines = multiline,
+                .placeholder = "输入当前事项的最新进展……",
+            }, .{ .rect = .{ .x = 20, .y = 20, .w = 170, .h = 100 }, .tag = "empty-editor" });
+            defer editor.deinit();
+            _ = @import("text_editor.zig").process(&editor, &history, false);
+            @import("text_editor.zig").draw(&editor);
+            cursor = editor.textLayout.cursor_rect;
+            selection = editor.textLayout.selection.*;
+            return .ok;
+        }
+
+        fn expectOrigin() !void {
+            try std.testing.expectEqual(@as(f32, 0), cursor.x);
+            try std.testing.expectEqual(@as(f32, 0), cursor.y);
+            try std.testing.expectEqual(@as(usize, 0), selection.cursor);
+            try std.testing.expect(selection.empty());
+            try std.testing.expectEqualStrings("", std.mem.sliceTo(&buffer, 0));
+        }
+    };
+
+    for ([_]bool{ false, true }) |multiline| {
+        var t = try dvui.testing.init(.{});
+        defer t.deinit();
+        @import("theme.zig").apply(t.window);
+        Editor.buffer = @splat(0);
+        Editor.history = .{};
+        defer Editor.history.clear();
+        Editor.multiline = multiline;
+        try dvui.testing.settle(Editor.frame);
+        const rect = (try dvui.testing.tagGet("empty-editor")).rect;
+        // Click inside the placeholder, then below it. Check immediately:
+        // settling first would hide the one-frame jump reported by users.
+        for ([_]f32{ 12, 65 }) |y| {
+            dvui.focusWidget(null, null, null);
+            try dvui.testing.settle(Editor.frame);
+            _ = try t.window.addEventMouseMotion(.{ .pt = .{
+                .x = rect.x + 140 * t.window.natural_scale,
+                .y = rect.y + y * t.window.natural_scale,
+            } });
+            _ = try t.window.addEventMouseButton(.left, .press);
+            _ = try dvui.testing.step(Editor.frame);
+            try Editor.expectOrigin();
+            _ = try t.window.addEventMouseButton(.left, .release);
+            _ = try dvui.testing.step(Editor.frame);
+            try Editor.expectOrigin();
+        }
+        try dvui.testing.pressKey(.a, .lcontrol);
+        _ = try dvui.testing.step(Editor.frame);
+        try Editor.expectOrigin();
+        try dvui.testing.writeText("在");
+        try dvui.testing.settle(Editor.frame);
+        try std.testing.expectEqualStrings("在", std.mem.sliceTo(&Editor.buffer, 0));
+        try dvui.testing.pressKey(.z, .lcontrol);
+        _ = try dvui.testing.step(Editor.frame);
+        try Editor.expectOrigin();
+        try dvui.testing.pressKey(.y, .lcontrol);
+        try dvui.testing.settle(Editor.frame);
+        try std.testing.expectEqualStrings("在", std.mem.sliceTo(&Editor.buffer, 0));
+    }
+}
+
 test "zoom shortcuts work with each editor focused without changing text selection or undo" {
     // Enable DVUI's fallback as well: handled keys must never scale twice.
     var t = try dvui.testing.init(.{ .window_size = .{ .w = 1100, .h = 760 }, .window_init_opts = .{ .keybinds_zoom = true } });
