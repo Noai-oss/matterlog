@@ -25,6 +25,7 @@ pub const Notice = enum {
     database_error,
     draft_unavailable,
     history_unavailable,
+    preferences_unavailable,
 };
 
 pub const PendingAction = union(enum) {
@@ -64,6 +65,7 @@ pub const AppState = struct {
     sidebar_ratio: f32 = 0.28,
     composer_height: f32 = 100,
     zoom_percent: u16 = zoom.default_percent,
+    zoom_last_attempted: u16 = zoom.default_percent,
     selected_task_id: ?i64 = null,
     task_filter: TaskFilter = .active,
 
@@ -93,6 +95,12 @@ pub const AppState = struct {
 
         self.store = try database.Database.open(database_path);
         try self.reloadData(allocator, null);
+        const saved_zoom = self.store.?.loadZoomPercent() catch blk: {
+            self.notice = .preferences_unavailable;
+            break :blk null;
+        };
+        self.zoom_percent = zoom.restore(saved_zoom orelse zoom.default_percent);
+        self.zoom_last_attempted = self.zoom_percent;
     }
 
     pub fn deinit(self: *AppState, allocator: std.mem.Allocator) void {
@@ -112,11 +120,12 @@ pub const AppState = struct {
         self: *AppState,
         allocator: std.mem.Allocator,
     ) bool {
+        const preferences_changed = self.savePreferences();
         const action = self.pending;
         self.pending = .none;
 
         switch (action) {
-            .none => return false,
+            .none => return preferences_changed,
             .create_task => self.processCreateTask(allocator) catch |err| self.databaseFailure(err),
             .rename_task => |task_id| {
                 self.processRenameTask(allocator, task_id) catch |err| self.databaseFailure(err);
@@ -138,6 +147,21 @@ pub const AppState = struct {
             },
         }
 
+        return true;
+    }
+
+    fn savePreferences(self: *AppState) bool {
+        if (self.zoom_percent == self.zoom_last_attempted) return false;
+        // Coalesce changes within a frame and attempt once per user change.
+        // A failed preference write must not retry on every redraw or stop CRUD.
+        self.zoom_last_attempted = self.zoom_percent;
+        if (self.store) |*store| {
+            store.saveZoomPercent(self.zoom_percent) catch {
+                self.notice = .preferences_unavailable;
+                return true;
+            };
+            if (self.notice == .preferences_unavailable) self.notice = .none;
+        }
         return true;
     }
 
@@ -722,4 +746,77 @@ test "edit and rename sessions reset their histories without clearing draft hist
     try std.testing.expectEqualStrings("keep draft", bufferText(&app.draft().buffer));
     try app.processDeleteTask(allocator, id);
     try std.testing.expectEqual(@as(u32, 0), app.drafts.count());
+}
+
+test "zoom preference survives database reopen and invalid values fall back without losing records" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const directory = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(directory);
+    const path = try std.fs.path.joinZ(allocator, &.{ directory, "zoom.db" });
+    defer allocator.free(path);
+    {
+        var app: AppState = .{};
+        try app.init(allocator, path);
+        defer app.deinit(allocator);
+        try std.testing.expectEqual(zoom.default_percent, app.zoom_percent);
+        try app.processCreateTask(allocator);
+        setBuffer(&app.draft().buffer, "已有记录不会被缩放设置影响");
+        try app.processCreateEntry(allocator, app.selected_task_id.?);
+        app.zoom_percent = 150;
+        try std.testing.expect(app.processPendingAction(allocator));
+    }
+    {
+        var app: AppState = .{};
+        try app.init(allocator, path);
+        defer app.deinit(allocator);
+        try std.testing.expectEqual(@as(u16, 150), app.zoom_percent);
+        try std.testing.expectEqualStrings("已有记录不会被缩放设置影响", app.tasks.items[0].entries.items[0].body);
+        app.zoom_percent = zoom.default_percent;
+        _ = app.processPendingAction(allocator);
+    }
+    const c = @import("sqlite");
+    for ([_][:0]const u8{
+        "UPDATE preferences SET value = 100", // reset survives reopening
+        "UPDATE preferences SET value = -1",
+        "UPDATE preferences SET value = 0",
+        "UPDATE preferences SET value = 999999999999",
+        "UPDATE preferences SET value = 'broken'",
+        "UPDATE preferences SET value = 1.25", // never interpret a scale as percent
+    }) |sql| {
+        {
+            var store = try database.Database.open(path);
+            defer store.close();
+            try std.testing.expectEqual(c.SQLITE_OK, c.sqlite3_exec(store.handle, sql, null, null, null));
+        }
+        var app: AppState = .{};
+        try app.init(allocator, path);
+        defer app.deinit(allocator);
+        try std.testing.expectEqual(zoom.default_percent, app.zoom_percent);
+        try std.testing.expectEqual(@as(usize, 1), app.tasks.items[0].entries.items.len);
+    }
+}
+
+test "preference write failure is reported once and does not stop recording" {
+    const allocator = std.testing.allocator;
+    var app: AppState = .{};
+    try app.init(allocator, ":memory:");
+    defer app.deinit(allocator);
+    try app.processCreateTask(allocator);
+    const c = @import("sqlite");
+    try std.testing.expectEqual(c.SQLITE_OK, c.sqlite3_exec(app.storePtr().handle, "CREATE TRIGGER reject_preference BEFORE INSERT ON preferences BEGIN SELECT RAISE(ABORT, 'test'); END;", null, null, null));
+    app.zoom_percent = 120;
+    try std.testing.expect(app.processPendingAction(allocator));
+    try std.testing.expectEqual(Notice.preferences_unavailable, app.notice);
+    try std.testing.expect(!app.processPendingAction(allocator));
+    try std.testing.expectEqual(@as(u16, 120), app.zoom_percent);
+    setBuffer(&app.draft().buffer, "仍可保存进展");
+    app.pending = .{ .create_entry = app.selected_task_id.? };
+    try std.testing.expect(app.processPendingAction(allocator));
+    try std.testing.expectEqualStrings("仍可保存进展", app.selectedTask().?.entries.items[0].body);
+    try std.testing.expectEqual(c.SQLITE_OK, c.sqlite3_exec(app.storePtr().handle, "DROP TRIGGER reject_preference;", null, null, null));
+    app.zoom_percent = 130;
+    _ = app.processPendingAction(allocator);
+    try std.testing.expectEqual(@as(?i64, 130), try app.storePtr().loadZoomPercent());
 }
