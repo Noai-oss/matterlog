@@ -793,7 +793,7 @@ fn drawComposer(app: *AppState, task_id: i64) void {
 
 fn drawNotice(app: *const AppState) void {
     const message: []const u8 = switch (app.notice) {
-        .none => if (app.mode == .rename_task) "Enter 保存名称 · Esc 取消" else "",
+        .none => if (app.mode == .rename_task) "Enter 保存名称 · Esc 取消" else return,
         .confirm_delete_task => "删除事项及全部进展？按 Esc 取消。",
         .confirm_delete_entry => "确定删除这条进展？按 Esc 取消。",
         .empty_title => "事项名称不能为空。",
@@ -835,7 +835,6 @@ fn drawNotice(app: *const AppState) void {
     else
         dvui.Color.fromHex(if (dvui.themeGet().dark) "#9ad7b0" else "#28613a");
 
-    // Reserve one line even when empty so notices never shift the editor.
     const notice_height: f32 = 16;
     dvui.labelNoFmt(
         @src(),
