@@ -30,11 +30,28 @@ pub fn draw(app: *AppState) void {
 
     processEscapeShortcut(app, root.data());
     drawMainPanes(app);
+    var footer = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+    defer footer.deinit();
+    if (app.sidebar_ratio == 0) drawExpandButton(app, "展开事项栏");
     zoom_controls.draw(&app.zoom_percent);
+    if (app.sidebar_ratio == 1) drawExpandButton(app, "展开进展区");
+}
+
+fn drawExpandButton(app: *AppState, label: []const u8) void {
+    if (dvui.button(@src(), label, .{}, .{
+        .font = dvui.Font.theme(.body).withSize(10),
+        .padding = .{ .x = 6, .w = 6, .y = 3, .h = 3 },
+        .gravity_y = 0.5,
+        .tab_index = 0,
+        .tag = if (@import("builtin").is_test) "expand-pane" else null,
+    })) {
+        app.sidebar_ratio = app.expanded_sidebar_ratio;
+        dvui.refresh(null, @src(), null);
+    }
 }
 
 fn processEscapeShortcut(app: *AppState, root_data: *dvui.WidgetData) void {
-    if (!app.hasActiveMode()) return;
+    if (!app.hasActiveMode() or app.sidebar_ratio == 1) return;
     if (app.edit_history.composing or app.rename_history.composing) return;
 
     for (dvui.events()) |*event| {
@@ -51,12 +68,17 @@ fn processEscapeShortcut(app: *AppState, root_data: *dvui.WidgetData) void {
 }
 
 fn drawMainPanes(app: *AppState) void {
-    var panes = dvui.paned(
+    const before = app.sidebar_ratio;
+    // Sidebar actions may request a different split for the next frame.
+    // Lay out both panes of this frame with the same divider position.
+    var ratio = before;
+    var panes: dvui.PanedWidget = undefined;
+    panes.init(
         @src(),
         .{
             .direction = .horizontal,
             .collapsed_size = 0,
-            .split_ratio = &app.sidebar_ratio,
+            .split_ratio = &ratio,
             // Keep the handle width stable while hovering to prevent jitter.
             .handle_size = 6,
             .handle_margin = 2,
@@ -65,6 +87,22 @@ fn drawMainPanes(app: *AppState) void {
     );
     defer panes.deinit();
 
+    const was_dragging = dvui.captured(panes.data().id);
+    panes.processEvents();
+    if (!was_dragging and before > 0 and before < 1 and
+        (dvui.captured(panes.data().id) or ratio != before))
+        app.expanded_sidebar_ratio = before;
+    app.sidebar_ratio = ratio;
+    if (ratio == 1 and before != 1) {
+        // A hidden editor no longer receives its focus-loss frame.
+        if (app.selected_task_id != null) {
+            const draft = app.draft();
+            draft.history.cancelComposition(&draft.buffer);
+        }
+        app.rename_history.cancelComposition(&app.rename_buffer);
+        app.edit_history.cancelComposition(&app.edit_buffer);
+        dvui.focusWidget(null, null, null);
+    }
     if (panes.showFirst()) drawSidebar(app);
     if (panes.showSecond()) drawDetailPanel(app);
 }
@@ -78,9 +116,12 @@ fn drawSidebar(app: *AppState) void {
             .background = true,
             .style = .content,
             .padding = .all(10),
+            .tag = if (@import("builtin").is_test) "sidebar-pane" else null,
         },
     );
     defer sidebar.deinit();
+    const previous_clip = dvui.clip(sidebar.data().borderRectScale().r);
+    defer dvui.clipSet(previous_clip);
 
     drawSidebarHeader(app);
     drawTaskFilters(app);
@@ -137,6 +178,7 @@ fn drawSidebarHeader(app: *AppState) void {
     );
 
     if (dvui.button(@src(), "新建", .{}, .{ .style = .control, .tag = if (@import("builtin").is_test) "new-task" else null })) {
+        if (app.sidebar_ratio == 1) app.sidebar_ratio = app.expanded_sidebar_ratio;
         app.pending = .create_task;
     }
 }
@@ -243,6 +285,7 @@ fn drawTaskButton(app: *AppState, task: *const database.Task) void {
     const clicked = button.clicked();
     button.deinit();
     if (clicked) {
+        if (app.sidebar_ratio == 1) app.sidebar_ratio = app.expanded_sidebar_ratio;
         app.selectTask(dvui.currentWindow().gpa, task.id) catch {
             app.notice = .draft_unavailable;
         };
@@ -260,9 +303,12 @@ fn drawDetailPanel(app: *AppState) void {
             .background = true,
             .style = .window,
             .padding = .{ .x = 12, .y = 12, .w = 12, .h = 6 },
+            .tag = if (@import("builtin").is_test) "detail-pane" else null,
         },
     );
     defer detail.deinit();
+    const previous_clip = dvui.clip(detail.data().borderRectScale().r);
+    defer dvui.clipSet(previous_clip);
 
     const task = app.selectedTask() orelse {
         switch (app.task_filter) {

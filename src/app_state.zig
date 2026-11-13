@@ -63,6 +63,8 @@ pub const AppState = struct {
     tasks: std.ArrayList(database.Task) = .empty,
 
     sidebar_ratio: f32 = 0.28,
+    // The two-pane position before the drag that hid a pane.
+    expanded_sidebar_ratio: f32 = 0.28,
     composer_height: f32 = 100,
     zoom_percent: u16 = zoom.default_percent,
     zoom_last_attempted: u16 = zoom.default_percent,
