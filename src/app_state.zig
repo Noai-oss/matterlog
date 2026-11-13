@@ -1,6 +1,7 @@
 const std = @import("std");
 const database = @import("database.zig");
 const History = @import("text_history.zig").History;
+const zoom = @import("zoom.zig");
 
 const title_capacity = 256;
 const entry_capacity = 16 * 1024;
@@ -62,6 +63,7 @@ pub const AppState = struct {
 
     sidebar_ratio: f32 = 0.28,
     composer_height: f32 = 100,
+    zoom_percent: u16 = zoom.default_percent,
     selected_task_id: ?i64 = null,
     task_filter: TaskFilter = .active,
 
