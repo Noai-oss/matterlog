@@ -12,8 +12,6 @@ const AppState = state.AppState;
 const TaskFilter = state.TaskFilter;
 const header_action_button_width: f32 = 72;
 const header_secondary_button_width: f32 = 40;
-const sidebar_padding: f32 = 10;
-const detail_padding: f32 = 12;
 
 const HeaderControlPosition = enum { middle, trailing };
 
@@ -70,7 +68,10 @@ fn processEscapeShortcut(app: *AppState, root_data: *dvui.WidgetData) void {
 }
 
 fn drawMainPanes(app: *AppState) void {
-    var ratio = app.sidebar_ratio;
+    const before = app.sidebar_ratio;
+    // Sidebar actions may request a different split for the next frame.
+    // Lay out both panes of this frame with the same divider position.
+    var ratio = before;
     var panes: dvui.PanedWidget = undefined;
     panes.init(
         @src(),
@@ -86,51 +87,24 @@ fn drawMainPanes(app: *AppState) void {
     );
     defer panes.deinit();
 
-    const available = @max(1, panes.data().contentRect().w - 2 * panes.handleSize());
-    const limits = paneRatioLimits(available);
-    if (ratio > 0 and ratio < 1) ratio = std.math.clamp(ratio, limits.min, limits.max);
-    const before = ratio;
     const was_dragging = dvui.captured(panes.data().id);
     panes.processEvents();
     if (!was_dragging and before > 0 and before < 1 and
         (dvui.captured(panes.data().id) or ratio != before))
-        app.expanded_sidebar_ratio = app.sidebar_ratio;
-    if (ratio != before) {
-        const edge = @min(24 / available, @min(limits.min, 1 - limits.max) / 2);
-        if (ratio <= edge) {
-            ratio = 0;
-        } else if (ratio >= 1 - edge) {
-            ratio = 1;
-        } else {
-            ratio = std.math.clamp(ratio, limits.min, limits.max);
+        app.expanded_sidebar_ratio = before;
+    app.sidebar_ratio = ratio;
+    if (ratio == 1 and before != 1) {
+        // A hidden editor no longer receives its focus-loss frame.
+        if (app.selected_task_id != null) {
+            const draft = app.draft();
+            draft.history.cancelComposition(&draft.buffer);
         }
-        app.sidebar_ratio = ratio;
-        if (ratio == 1 and before != 1) {
-            // A hidden editor no longer receives its focus-loss frame.
-            if (app.selected_task_id != null) {
-                const draft = app.draft();
-                draft.history.cancelComposition(&draft.buffer);
-            }
-            app.rename_history.cancelComposition(&app.rename_buffer);
-            app.edit_history.cancelComposition(&app.edit_buffer);
-            dvui.focusWidget(null, null, null);
-        }
+        app.rename_history.cancelComposition(&app.rename_buffer);
+        app.edit_history.cancelComposition(&app.edit_buffer);
+        dvui.focusWidget(null, null, null);
     }
     if (panes.showFirst()) drawSidebar(app);
     if (panes.showSecond()) drawDetailPanel(app);
-}
-
-fn paneRatioLimits(available: f32) struct { min: f32, max: f32 } {
-    // Budget both header rows, including a two-character detail title prefix.
-    // DVUI measures text in layout units at the current zoom and display scale.
-    const sidebar = 2 * sidebar_padding + 10 + dvui.Font.theme(.heading).textSize("事项").w +
-        dvui.ButtonWidget.defaults.padSize(dvui.Font.theme(.body).textSize("新建")).w;
-    const middle = headerButtonOptions(header_action_button_width, .middle, null);
-    const trailing = headerButtonOptions(header_secondary_button_width, .trailing, null);
-    const detail = 2 * detail_padding + 12 + dvui.Font.theme(.title).textSize("事项…").w +
-        2 * middle.padSize(.width(header_action_button_width)).w + trailing.padSize(.width(header_secondary_button_width)).w;
-    const budget = @max(available, sidebar + detail);
-    return .{ .min = sidebar / budget, .max = @max(sidebar / budget, 1 - detail / budget) };
 }
 
 fn drawSidebar(app: *AppState) void {
@@ -141,10 +115,13 @@ fn drawSidebar(app: *AppState) void {
             .expand = .both,
             .background = true,
             .style = .content,
-            .padding = .all(sidebar_padding),
+            .padding = .all(10),
+            .tag = if (@import("builtin").is_test) "sidebar-pane" else null,
         },
     );
     defer sidebar.deinit();
+    const previous_clip = dvui.clip(sidebar.data().borderRectScale().r);
+    defer dvui.clipSet(previous_clip);
 
     drawSidebarHeader(app);
     drawTaskFilters(app);
@@ -325,10 +302,13 @@ fn drawDetailPanel(app: *AppState) void {
             .expand = .both,
             .background = true,
             .style = .window,
-            .padding = .{ .x = detail_padding, .y = 12, .w = detail_padding, .h = 6 },
+            .padding = .{ .x = 12, .y = 12, .w = 12, .h = 6 },
+            .tag = if (@import("builtin").is_test) "detail-pane" else null,
         },
     );
     defer detail.deinit();
+    const previous_clip = dvui.clip(detail.data().borderRectScale().r);
+    defer dvui.clipSet(previous_clip);
 
     const task = app.selectedTask() orelse {
         switch (app.task_filter) {
@@ -472,7 +452,7 @@ fn drawTaskHeader(app: *AppState, task: *const database.Task) void {
                     @src(),
                     "重命名",
                     .{},
-                    headerButtonOptions(header_action_button_width, .middle, null).override(.{ .tag = if (@import("builtin").is_test) "task-rename" else null }),
+                    headerButtonOptions(header_action_button_width, .middle, null),
                 )) {
                     app.beginRename(task);
                     dvui.refresh(null, @src(), null);
@@ -482,7 +462,7 @@ fn drawTaskHeader(app: *AppState, task: *const database.Task) void {
                     @src(),
                     "删除",
                     .{},
-                    headerButtonOptions(header_secondary_button_width, .trailing, null).override(.{ .tag = if (@import("builtin").is_test) "task-delete" else null }),
+                    headerButtonOptions(header_secondary_button_width, .trailing, null),
                 )) {
                     app.requestTaskDeletion(task.id);
                     dvui.refresh(null, @src(), null);

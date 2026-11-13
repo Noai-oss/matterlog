@@ -284,7 +284,7 @@ test "zoom keeps composer and saved entry actions reachable in a small window" {
     try std.testing.expect(!Harness.app.hasActiveMode());
 }
 
-test "horizontal divider keeps actions reachable and restores either collapsed pane" {
+test "horizontal divider follows the pointer down to either edge and restores the previous split" {
     const Drag = struct {
         fn to(win: *dvui.Window, from: f32, to_x: f32) !void {
             const point: dvui.Point.Physical = .{ .x = from, .y = win.rect_pixels.h / 3 };
@@ -299,6 +299,30 @@ test "horizontal divider keeps actions reachable and restores either collapsed p
         }
         fn handle(win: *dvui.Window) f32 {
             return (win.rect_pixels.w - 10 * win.natural_scale) * Harness.app.sidebar_ratio + 5 * win.natural_scale;
+        }
+
+        fn toEdge(win: *dvui.Window, right: bool) !void {
+            const y = win.rect_pixels.h / 3;
+            _ = try win.addEventMouseMotion(.{ .pt = .{ .x = handle(win), .y = y } });
+            _ = try win.addEventMouseButton(.left, .press);
+            try dvui.testing.settle(Harness.frame);
+            var previous = win.rect_pixels.w;
+            // Observe the visible pane itself during one continuous drag,
+            // including positions inside the former 24-unit snap zone.
+            for ([_]f32{ 96, 56, 28, 20, 12, 8 }) |distance| {
+                const offset = distance * win.natural_scale;
+                const x = if (right) win.rect_pixels.w - offset else offset;
+                _ = try win.addEventMouseMotion(.{ .pt = .{ .x = x, .y = y } });
+                try dvui.testing.settle(Harness.frame);
+                const pane = try dvui.testing.tagGet(if (right) "detail-pane" else "sidebar-pane");
+                try std.testing.expect(pane.visible and pane.rect.w > 0 and pane.rect.w < previous);
+                try std.testing.expectApproxEqAbs(offset, pane.rect.w, 6 * win.natural_scale);
+                previous = pane.rect.w;
+            }
+            const edge: f32 = if (right) win.rect_pixels.w else 0;
+            _ = try win.addEventMouseMotion(.{ .pt = .{ .x = edge, .y = y } });
+            _ = try win.addEventMouseButton(.left, .release);
+            try dvui.testing.settle(Harness.frame);
         }
     };
     var t = try dvui.testing.init(.{
@@ -319,28 +343,12 @@ test "horizontal divider keeps actions reachable and restores either collapsed p
         Harness.app.zoom_percent = zoom;
         try dvui.testing.settle(Harness.frame);
         const original = Harness.app.sidebar_ratio;
-        const width = t.window.rect_pixels.w;
-        const scale = t.window.natural_scale;
-        try Drag.to(t.window, Drag.handle(t.window), 46 * scale);
-        try std.testing.expect(Harness.app.sidebar_ratio > 46 * scale / width);
-        const new_task = try dvui.testing.tagGet("new-task");
-        try std.testing.expect(new_task.visible and new_task.rect.x + new_task.rect.w <= Drag.handle(t.window));
-        try Drag.to(t.window, Drag.handle(t.window), 1);
+        try Drag.toEdge(t.window, false);
         try std.testing.expectEqual(@as(f32, 0), Harness.app.sidebar_ratio);
         try std.testing.expect((try dvui.testing.tagGet("send-entry")).visible);
         try Harness.click("expand-pane");
-        try std.testing.expect(Harness.app.sidebar_ratio > 0);
-        try Drag.to(t.window, Drag.handle(t.window), width - 50 * scale);
-        const rename = try dvui.testing.tagGet("task-rename");
-        const remove = try dvui.testing.tagGet("task-delete");
-        try std.testing.expect(rename.visible and remove.visible);
-        try std.testing.expect(remove.rect.x + remove.rect.w <= width);
-        try std.testing.expect((try dvui.testing.tagGet("composer")).rect.w >= 80 * scale);
-        if (zoom == 150) try t.saveImage(Harness.frame, null, "panes-detail-minimum.png");
-        // Reopen at the pre-drag position, even after intermediate motion.
-        Harness.app.sidebar_ratio = original;
-        try dvui.testing.settle(Harness.frame);
-        try Drag.to(t.window, Drag.handle(t.window), width - 1);
+        try std.testing.expectApproxEqAbs(original, Harness.app.sidebar_ratio, 0.001);
+        try Drag.toEdge(t.window, true);
         try std.testing.expectEqual(@as(f32, 1), Harness.app.sidebar_ratio);
         try std.testing.expect((try dvui.testing.tagGet("new-task")).visible);
         try Harness.click("expand-pane");

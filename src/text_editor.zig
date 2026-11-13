@@ -25,13 +25,20 @@ fn drawPlaceholder(editor: *dvui.TextEntryWidget, opts: dvui.Options) void {
     // layout makes a click position the caret within the hint for one frame,
     // before TextEntry clamps the byte offset back to zero.
     if (dvui.accesskit_enabled) dvui.currentWindow().accesskit.text_run_parent = null;
+    // Bound the overlay, but let the text layout finish wrapped runs even when
+    // their last lines are clipped by a very narrow editor.
+    var overlay = dvui.overlay(@src(), .{
+        .rect = editor.textLayout.data().contentRect().justSize(),
+        .role = .none,
+    });
+    defer overlay.deinit();
     var hint: dvui.TextLayoutWidget = undefined;
     hint.init(@src(), .{
         .break_lines = editor.init_opts.break_lines,
         .focused = false,
         .process_events_in_deinit = false,
     }, opts.override(.{
-        .rect = editor.textLayout.data().contentRect().justSize(),
+        .expand = .both,
         .color_text = editor.textLayout.data().options.color(.text).opacity(0.65),
         .role = .none,
     }));
