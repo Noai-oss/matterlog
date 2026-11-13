@@ -759,7 +759,15 @@ test "hints and feedback stay outside the composer at supported window sizes" {
             try Harness.click("new-task");
             try Harness.typeText("桌面工具体验改进");
             try Harness.key(.enter, .none);
+            Harness.app.beginRename(Harness.app.selectedTask().?);
+            try dvui.testing.settle(Harness.frame);
+            try std.testing.expectEqual(state.Notice.none, Harness.app.notice);
+            try std.testing.expect((try dvui.testing.tagGet("notice")).visible); // Rename shortcut hint.
+            try Harness.key(.escape, .none);
+            try std.testing.expect(dvui.tagGet("notice") == null);
             try Harness.click("composer");
+            const idle_editor = (try dvui.testing.tagGet("composer")).rect;
+            if (size.w == 760 and !dark) try t.saveImage(Harness.frame, null, "composer-no-notice.png");
             try Harness.key(.enter, .lcontrol);
             try std.testing.expectEqual(state.Notice.empty_entry, Harness.app.notice);
             const hint = (try dvui.testing.tagGet("composer-hint")).rect;
@@ -769,6 +777,8 @@ test "hints and feedback stay outside the composer at supported window sizes" {
             try std.testing.expect(hint.h > 0);
             try std.testing.expect(hint.y + hint.h <= editor.y + 0.5);
             try std.testing.expect(notice.y >= editor.y + editor.h);
+            // Removing feedback gives its entire row back to the layout.
+            try std.testing.expect(idle_editor.y + idle_editor.h >= editor.y + editor.h + notice.h - 1);
             try std.testing.expect(notice.y + notice.h <= t.window.rect_pixels.h);
             try std.testing.expect(send.x >= editor.x + editor.w);
             if (size.w == 760 and !dark) try t.saveImage(Harness.frame, null, "empty-entry-feedback.png");
