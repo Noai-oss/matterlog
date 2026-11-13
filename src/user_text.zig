@@ -2,7 +2,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const theme = @import("theme.zig");
 
-/// Non-interactive, clipped single-line text for task names and button labels.
+/// Non-interactive, ellipsized single-line text for task names and button labels.
 pub fn label(src: std.builtin.SourceLocation, text: []const u8, opts: dvui.Options) void {
     var layout: dvui.TextLayoutWidget = undefined;
     layout.init(src, .{ .break_lines = false, .focused = false, .process_events_in_deinit = false }, opts.override(.{
@@ -10,32 +10,81 @@ pub fn label(src: std.builtin.SourceLocation, text: []const u8, opts: dvui.Optio
         .max_size_content = .{ .w = 0, .h = opts.fontGet().textHeight() },
     }));
     defer layout.deinit();
-    addText(&layout, text, opts.strip());
+    const visible = fitLabel(text, opts.fontGet(), layout.data().contentRect().w);
+    addText(&layout, visible, opts.strip());
+}
+
+/// Returns frame-local display text. Stored titles and accessibility labels
+/// retain the original string; fitting uses the same font runs as rendering.
+pub fn fitLabel(text: []const u8, font: dvui.Font, width: f32) []const u8 {
+    var runs = TextRuns.init(text, font);
+    var full_width: f32 = 0;
+    while (runs.next()) |run| full_width += run.font.textSize(run.text).w;
+    if (full_width <= width) return text;
+
+    const ellipsis = "…";
+    const ellipsis_width = font.textSize(ellipsis).w;
+    if (width < ellipsis_width) return "";
+    var remaining = width - ellipsis_width;
+    var end: usize = 0;
+    runs = TextRuns.init(text, font);
+    while (runs.next()) |run| {
+        var count: usize = 0;
+        const size = run.font.textSizeEx(run.text, .{ .max_width = remaining, .end_idx = &count });
+        end += count;
+        remaining = @max(0, remaining - size.w);
+        if (count < run.text.len) break;
+    }
+    return std.fmt.allocPrint(dvui.currentWindow().arena(), "{s}{s}", .{ text[0..end], ellipsis }) catch ellipsis;
 }
 
 /// Runs reference the original UTF-8 bytes: wrapping and font fallback must
 /// never insert separators into selections, clipboard contents or saved text.
 pub fn addText(layout: *dvui.TextLayoutWidget, text: []const u8, opts: dvui.Options) void {
     const primary = opts.font orelse layout.data().options.fontGet();
-    const fallback = primary.withFamily(theme.emoji_family);
-    var iter = (std.unicode.Utf8View.initUnchecked(text)).iterator();
-    var start: usize = 0;
-    var previous: ?struct { fallback: bool, cjk: bool } = null;
-    while (true) {
-        const offset = iter.i;
-        const codepoint = iter.nextCodepoint() orelse break;
-        const use_fallback = codepoint >= 0x80 and !hasGlyph(primary, codepoint) and hasGlyph(fallback, codepoint);
-        const cjk = isCjk(codepoint);
-        if (previous) |prev| {
-            if (prev.fallback != use_fallback or prev.cjk != cjk) {
-                layout.addText(text[start..offset], opts.override(.{ .font = if (prev.fallback) fallback else primary }));
-                start = offset;
+    var runs = TextRuns.init(text, primary);
+    while (runs.next()) |run| {
+        layout.addText(run.text, opts.override(.{ .font = run.font }));
+    }
+}
+
+const TextRuns = struct {
+    text: []const u8,
+    primary: dvui.Font,
+    fallback: dvui.Font,
+    offset: usize = 0,
+
+    const Kind = struct { fallback: bool, cjk: bool };
+    const Run = struct { text: []const u8, font: dvui.Font };
+
+    fn init(text: []const u8, primary: dvui.Font) TextRuns {
+        return .{ .text = text, .primary = primary, .fallback = primary.withFamily(theme.emoji_family) };
+    }
+
+    fn kind(self: TextRuns, cp: u21) Kind {
+        return .{
+            .fallback = cp >= 0x80 and !hasGlyph(self.primary, cp) and hasGlyph(self.fallback, cp),
+            .cjk = isCjk(cp),
+        };
+    }
+
+    fn next(self: *TextRuns) ?Run {
+        const start = self.offset;
+        var iter = (std.unicode.Utf8View.initUnchecked(self.text[start..])).iterator();
+        const first = self.kind(iter.nextCodepoint() orelse return null);
+        while (true) {
+            const end = iter.i;
+            const cp = iter.nextCodepoint() orelse break;
+            const current = self.kind(cp);
+            if (first.fallback != current.fallback or first.cjk != current.cjk) {
+                self.offset = start + end;
+                return .{ .text = self.text[start..self.offset], .font = if (first.fallback) self.fallback else self.primary };
             }
         }
-        previous = .{ .fallback = use_fallback, .cjk = cjk };
+        self.offset = self.text.len;
+        return .{ .text = self.text[start..], .font = if (first.fallback) self.fallback else self.primary };
     }
-    if (previous) |prev| layout.addText(text[start..], opts.override(.{ .font = if (prev.fallback) fallback else primary }));
-}
+};
 
 pub fn hasGlyph(font: dvui.Font, codepoint: u21) bool {
     const cache = dvui.fontCacheGet(font) catch return false;

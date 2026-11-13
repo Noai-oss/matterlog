@@ -237,6 +237,7 @@ fn drawTaskButton(app: *AppState, task: *const database.Task) void {
     user_text.label(@src(), task.title, button.data().options.strip().override(button.style()).override(.{
         .expand = .horizontal,
         .gravity_y = 0.5,
+        .tag = entryTestTag("task-title", task.id),
     }));
     button.drawFocus();
     const clicked = button.clicked();
