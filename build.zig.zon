@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .dvui = .{
-            .url = "git+https://github.com/david-vanderson/dvui?ref=main#41896697858695df3936310088d24986ba787267",
-            .hash = "dvui-0.6.0-dev-AQFJmcOVBAHG27zMs-WHKOwoYiXVT-55f71TaOZ4elz1",
+            .url = "git+https://github.com/david-vanderson/dvui?ref=main#497ac9fdc2ce0c7c70ad1d28bbdc6be759b58de5",
+            .hash = "dvui-0.6.0-dev-AQFJmdOsBAEBxwdrnJWio-RJxuXfjCP90DVYmTr6Z3BP",
         },
         .translate_c = .{
             .url = "git+https://codeberg.org/ziglang/translate-c?ref=zig-0.17.x#02ff0c523fb92a38939b04d0145c4a9602a74d56",
