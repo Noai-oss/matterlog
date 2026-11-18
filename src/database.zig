@@ -5,6 +5,7 @@ const c = @import("sqlite");
 const Error = error{
     DatabaseOpenFailed,
     DatabaseOperationFailed,
+    DuplicateTaskTitle,
     InvalidDatabaseData,
 };
 
@@ -118,6 +119,7 @@ pub const Database = struct {
             \\    title       TEXT NOT NULL,
             \\    completed   INTEGER NOT NULL DEFAULT 0
             \\);
+            \\CREATE INDEX IF NOT EXISTS idx_tasks_title ON tasks(title);
             \\CREATE TABLE IF NOT EXISTS entries (
             \\    id          INTEGER PRIMARY KEY AUTOINCREMENT,
             \\    task_id     INTEGER NOT NULL,
@@ -173,11 +175,21 @@ pub const Database = struct {
         return tasks;
     }
 
-    pub fn createTask(self: *Database, title: []const u8) !i64 {
-        const statement = try self.prepare("INSERT INTO tasks (title) VALUES (?);");
+    pub fn createTask(self: *Database, base_title: []const u8) !i64 {
+        // Pick and insert the first available name in one write, including completed tasks.
+        const statement = try self.prepare(
+            \\WITH RECURSIVE candidates(number, name) AS (
+            \\    VALUES (1, ?1)
+            \\    UNION ALL
+            \\    SELECT number + 1, ?1 || ' ' || (number + 1)
+            \\    FROM candidates
+            \\    WHERE EXISTS (SELECT 1 FROM tasks WHERE title = candidates.name)
+            \\)
+            \\INSERT INTO tasks(title) SELECT name FROM candidates ORDER BY number DESC LIMIT 1;
+        );
         defer _ = c.sqlite3_finalize(statement);
 
-        try bindText(statement, 1, title);
+        try bindText(statement, 1, base_title);
         try expectDone(c.sqlite3_step(statement));
 
         return @intCast(c.sqlite3_last_insert_rowid(self.handle));
@@ -189,13 +201,23 @@ pub const Database = struct {
         title: []const u8,
     ) !void {
         const statement = try self.prepare(
-            "UPDATE tasks SET title = ? WHERE id = ?;",
+            \\UPDATE tasks SET title = ?1
+            \\WHERE id = ?2 AND (title = ?1 OR NOT EXISTS (SELECT 1 FROM tasks WHERE title = ?1));
         );
         defer _ = c.sqlite3_finalize(statement);
 
         try bindText(statement, 1, title);
         try bindInt64(statement, 2, task_id);
         try expectDone(c.sqlite3_step(statement));
+        if (c.sqlite3_changes(self.handle) == 0) {
+            // A task already deleted by another writer keeps the usual no-op behavior.
+            const target = try self.prepare("SELECT 1 FROM tasks WHERE id = ?;");
+            defer _ = c.sqlite3_finalize(target);
+            try bindInt64(target, 1, task_id);
+            const result = c.sqlite3_step(target);
+            if (result == c.SQLITE_ROW) return Error.DuplicateTaskTitle;
+            try expectDone(result);
+        }
     }
 
     pub fn deleteTask(self: *Database, task_id: i64) !void {
@@ -442,6 +464,34 @@ fn duplicateColumnText(
 
     const bytes = @as([*c]const u8, @ptrCast(text))[0..length];
     return allocator.dupe(u8, bytes);
+}
+
+test "legacy duplicate titles keep their entries and can be renamed independently" {
+    const allocator = std.testing.allocator;
+    var database = try Database.open(":memory:");
+    defer database.close();
+    try database.exec(
+        \\INSERT INTO tasks(id, title, completed) VALUES (1, '新事项', 0), (2, '新事项', 1);
+        \\INSERT INTO entries(task_id, body) VALUES (1, '第一项的进展'), (2, '第二项的进展');
+    );
+    try database.initialize();
+
+    const third = try database.createTask("新事项");
+    try std.testing.expectError(error.DuplicateTaskTitle, database.renameTask(third, "新事项"));
+    try database.renameTask(1, "新事项");
+    try database.renameTask(2, "归档");
+    try std.testing.expectError(error.DuplicateTaskTitle, database.renameTask(1, "归档"));
+    try database.renameTask(999, "归档");
+
+    var tasks = try database.loadTasks(allocator);
+    defer deinitTasks(allocator, &tasks);
+    try std.testing.expectEqual(@as(usize, 3), tasks.items.len);
+    try std.testing.expectEqualStrings("新事项", tasks.items[0].title);
+    try std.testing.expectEqualStrings("第一项的进展", tasks.items[0].entries.items[0].body);
+    try std.testing.expectEqualStrings("归档", tasks.items[1].title);
+    try std.testing.expect(tasks.items[1].completed);
+    try std.testing.expectEqualStrings("第二项的进展", tasks.items[1].entries.items[0].body);
+    try std.testing.expectEqualStrings("新事项 2", tasks.items[2].title);
 }
 
 test "database CRUD and cascade deletion" {
