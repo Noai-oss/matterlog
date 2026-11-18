@@ -11,6 +11,7 @@ pub const Notice = enum {
     confirm_delete_task,
     confirm_delete_entry,
     empty_title,
+    duplicate_title,
     empty_entry,
     task_created,
     task_renamed,
@@ -313,7 +314,13 @@ pub const AppState = struct {
             return;
         }
 
-        try self.storePtr().renameTask(task_id, title);
+        self.storePtr().renameTask(task_id, title) catch |err| switch (err) {
+            error.DuplicateTaskTitle => {
+                self.notice = .duplicate_title;
+                return;
+            },
+            else => return err,
+        };
         try self.reloadData(allocator, task_id);
 
         self.mode = .none;
@@ -520,6 +527,42 @@ fn bufferText(buffer: []const u8) []const u8 {
 
 fn trimmedBuffer(buffer: []const u8) []const u8 {
     return std.mem.trim(u8, bufferText(buffer), " \t\r\n");
+}
+
+test "new tasks skip occupied names and a conflicting rename can be corrected" {
+    const allocator = std.testing.allocator;
+    var app: AppState = .{};
+    try app.init(allocator, ":memory:");
+    defer app.deinit(allocator);
+
+    try app.processCreateTask(allocator);
+    const first_id = app.selected_task_id.?;
+    try std.testing.expectEqualStrings("新事项", app.selectedTask().?.title);
+    try app.processToggleTaskCompleted(allocator, first_id);
+
+    try app.processCreateTask(allocator);
+    const second_id = app.selected_task_id.?;
+    try std.testing.expectEqualStrings("新事项 2", bufferText(&app.rename_buffer));
+    setBuffer(&app.rename_buffer, "新事项 3");
+    try app.processRenameTask(allocator, second_id);
+    try app.processCreateTask(allocator);
+    try std.testing.expectEqualStrings("新事项 2", app.selectedTask().?.title);
+    try app.processCreateTask(allocator);
+    const id = app.selected_task_id.?;
+    try std.testing.expectEqualStrings("新事项 4", app.selectedTask().?.title);
+
+    setBuffer(&app.rename_buffer, " 新事项 ");
+    app.pending = .{ .rename_task = id };
+    try std.testing.expect(app.processPendingAction(allocator));
+    try std.testing.expectEqual(Notice.duplicate_title, app.notice);
+    try std.testing.expect(app.isRenamingTask(id));
+    try std.testing.expectEqualStrings(" 新事项 ", bufferText(&app.rename_buffer));
+    try std.testing.expectEqualStrings("新事项 4", app.selectedTask().?.title);
+
+    setBuffer(&app.rename_buffer, " 项目复盘 ");
+    try app.processRenameTask(allocator, id);
+    try std.testing.expectEqual(Notice.task_renamed, app.notice);
+    try std.testing.expectEqualStrings("项目复盘", app.selectedTask().?.title);
 }
 
 test "cancelMode clears only the active mode buffer" {
